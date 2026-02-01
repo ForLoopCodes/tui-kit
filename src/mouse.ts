@@ -88,7 +88,7 @@ export function getPressedId(): string | null {
 export function parseMouseEvent(buf: Buffer): MouseEvent[] {
   const str = buf.toString()
   const events: MouseEvent[] = []
-  
+
   // SGR mode - \x1b[<Cb;Cx;CyM or \x1b[<Cb;Cx;Cy m
   const sgrMatches = str.matchAll(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/g)
   for (const match of sgrMatches) {
@@ -96,26 +96,26 @@ export function parseMouseEvent(buf: Buffer): MouseEvent[] {
     const x = parseInt(match[2]) - 1
     const y = parseInt(match[3]) - 1
     const release = match[4] === "m"
-    
+
     const buttonBits = code & 3
     const shift = (code & 4) !== 0
     const alt = (code & 8) !== 0
     const ctrl = (code & 16) !== 0
     const motion = (code & 32) !== 0
     const scroll = (code & 64) !== 0
-    
+
     let button: MouseButton = "none"
     if (scroll) button = (code & 1) === 0 ? "scroll-up" : "scroll-down"
     else if (buttonBits === 0) button = "left"
     else if (buttonBits === 1) button = "middle"
     else if (buttonBits === 2) button = "right"
-    
+
     let action: MouseAction = release ? "release" : "press"
     if (motion && !release) action = pressedId ? "drag" : "move"
-    
+
     events.push({ x, y, button, action, ctrl, alt, shift })
   }
-  
+
   if (events.length > 0) return events
 
   const legacyMatches = str.matchAll(/\x1b\[M(.)(.)(.)/g)
@@ -123,28 +123,28 @@ export function parseMouseEvent(buf: Buffer): MouseEvent[] {
     const code = match[1].charCodeAt(0) - 32
     const x = match[2].charCodeAt(0) - 33
     const y = match[3].charCodeAt(0) - 33
-    
+
     const buttonBits = code & 3
     const motion = (code & 32) !== 0
-    
+
     let button: MouseButton = "none"
     if (buttonBits === 0) button = "left"
     else if (buttonBits === 1) button = "middle"
     else if (buttonBits === 2) button = "right"
     else if (buttonBits === 3) button = "none"
-    
-    const action: MouseAction = motion ? (pressedId ? "drag" : "move") : (buttonBits === 3 ? "release" : "press" )
-    
+
+    const action: MouseAction = motion ? (pressedId ? "drag" : "move") : (buttonBits === 3 ? "release" : "press")
+
     events.push({ x, y, button, action, ctrl: false, alt: false, shift: false })
   }
-  
+
   return events
 }
 
 export function findRegionAt(x: number, y: number): MouseRegion | null {
   for (const region of regions) {
     if (x >= region.x && x < region.x + region.width &&
-        y >= region.y && y < region.y + region.height) {
+      y >= region.y && y < region.y + region.height) {
       return region
     }
   }
@@ -154,33 +154,33 @@ export function findRegionAt(x: number, y: number): MouseRegion | null {
 export function processMouseEvent(event: MouseEvent): { regionId: string | null; action: string } {
   lastMousePos = { x: event.x, y: event.y }
   const region = findRegionAt(event.x, event.y)
-  
+
   if (event.action === "move" || (event.action === "drag" && !pressedId)) {
     const newHoveredId = region?.id || null
     if (newHoveredId !== hoveredId) {
       const oldRegion = hoveredId ? regions.find(r => r.id === hoveredId) : null
       if (oldRegion?.onLeave) oldRegion.onLeave(event)
-      
+
       hoveredId = newHoveredId
-      
+
       if (region?.onEnter) region.onEnter(event)
       return { regionId: hoveredId, action: "hover_change" }
     }
     if (region?.onHover) region.onHover(event)
     return { regionId: hoveredId, action: "move" }
   }
-  
+
   if (event.action === "press") {
     const oldPressedId = pressedId
     pressedId = region?.id || null
     dragStart = { x: event.x, y: event.y }
-    
+
     if (pressedId !== oldPressedId) {
       if (region?.onPress) region.onPress(event)
     }
     return { regionId: pressedId, action: "press" }
   }
-  
+
   if (event.action === "release") {
     const releasedId = pressedId
     if (releasedId) {
@@ -193,7 +193,7 @@ export function processMouseEvent(event: MouseEvent): { regionId: string | null;
     dragStart = null
     return { regionId: releasedId, action: "release" }
   }
-  
+
   if (event.action === "drag" && pressedId && dragStart) {
     const pressedRegion = regions.find(r => r.id === pressedId)
     if (pressedRegion?.onDrag) {
@@ -204,7 +204,7 @@ export function processMouseEvent(event: MouseEvent): { regionId: string | null;
       return { regionId: pressedId, action: "drag" }
     }
   }
-  
+
   return { regionId: null, action: "none" }
 }
 
@@ -215,7 +215,7 @@ export function isResizeEdge(region: MouseRegion, x: number, y: number): string 
   const onRight = x >= region.x + region.width - edgeSize
   const onTop = y < region.y + edgeSize
   const onBottom = y >= region.y + region.height - edgeSize
-  
+
   if (onTop && onLeft) return "nw"
   if (onTop && onRight) return "ne"
   if (onBottom && onLeft) return "sw"
