@@ -9,259 +9,770 @@
  *  ███         ▀██████▀    ███    ███ █████▄▄██  ▀██████▀   ▀██████▀   ▄████▀      
  *                          ███    ███ ▀                                            
  *
- * Core virtual terminal rendering logic using custom jsx nodes implementation
- * Primary state management for screen buffers and keyboard interactive scrolling
+ * Core virtual terminal rendering with css like styling and interactive elements
+ * Manages screen buffer focus navigation mouse events and component tree rendering
  */
 
-export type Segment = { text: string; color?: string; bg?: string }
-type Style = { color?: string; bg?: string }
-type BoxProps = { width?: number; pad?: number; block?: boolean }
-type Props = Style & BoxProps & { children?: any }
-export type VNode = { type: string; props: Props; children: (VNode | string)[] }
+import { parseColor, toAnsiFg, toAnsiBg, reset, bold, dim, italic, underline, strikethrough, type RGBA } from "./colors"
+import { parseUnit, resolveUnit, parsePadding, getBorderChars, calculateLayout, layoutFlexChildren, layoutGridChildren, type LayoutProps, type BorderStyle, type Display, type Overflow, type TextAlign } from "./layout"
+import { enableMouse, disableMouse, parseMouseEvent, processMouseEvent, registerRegion, clearRegions, getHoveredId, findRegionAt } from "./mouse"
+import { parseKey, processKeyInput, setFocusedElement, isResizeMode, isMoveMode, exitModes, registerGlobalKeybind } from "./input"
+import { registerElement, focusElement, focusNext, focusPrev, getFocusedElement, clearRegistry, resetFocusOrder, handleInputKey, handleSelectKey, handleCheckboxKey, getElement, type InputState, type SelectState, type CheckboxState, type ButtonState, createInputState, createButtonState, createSelectState, createCheckboxState, renderInput, renderSelect, renderCheckbox, renderButton, renderHr, renderList, renderTable, createListState, createTableState, type ListState, type TableState } from "./elements"
+
+export type VNode = { type: string; props: Record<string, any>; children: (VNode | string)[] }
 export const Fragment = "Fragment"
 
-export function createElement(type: any, props: Props | null, ...children: any[]): VNode {
+export function createElement(type: any, props: Record<string, any> | null, ...children: any[]): VNode {
+  if (typeof type === "function") {
+    return type({ ...props, children })
+  }
   const nodes: (VNode | string)[] = []
-  const add = (child: any) => {
+  const flatten = (child: any) => {
     if (child == null || child === false || child === true) return
-    if (Array.isArray(child)) return child.forEach(add)
+    if (Array.isArray(child)) return child.forEach(flatten)
     nodes.push(typeof child === "number" ? String(child) : child)
   }
-  children.forEach(add)
+  children.forEach(flatten)
   return { type: typeof type === "string" ? type : String(type), props: props ?? {}, children: nodes }
 }
 
-const reset = "\x1b[0m"
-const clear = "\x1b[K"
-
-const colorCodes: Record<string, number> = {
-  black: 30,
-  red: 31,
-  green: 32,
-  yellow: 33,
-  blue: 34,
-  magenta: 35,
-  cyan: 36,
-  white: 37,
-  gray: 90,
-  grey: 90,
-  brightblack: 90,
-  brightred: 91,
-  brightgreen: 92,
-  brightyellow: 93,
-  brightblue: 94,
-  brightmagenta: 95,
-  brightcyan: 96,
-  brightwhite: 97,
-  default: 39
+interface StyleProps {
+  color?: string
+  bg?: string
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
 }
 
-export function parseJsx(source: string): Segment[] {
-  const segments: Segment[] = []
-  const tag = /<text\b([^>]*)>([\s\S]*?)<\/text>/gi
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = tag.exec(source))) {
-    if (match.index > lastIndex) segments.push({ text: source.slice(lastIndex, match.index) })
-    const attrs = parseAttrs(match[1] || "")
-    segments.push({ text: match[2], color: attrs.color, bg: attrs.bg })
-    lastIndex = match.index + match[0].length
-  }
-  if (lastIndex < source.length) segments.push({ text: source.slice(lastIndex) })
-  return segments
+interface BoxProps extends StyleProps, LayoutProps {
+  id?: string
+  focusable?: boolean
+  tabIndex?: number
+  keybind?: string
+  resizable?: boolean
+  movable?: boolean
+  hoverBg?: string
+  onFocus?: () => void
+  onBlur?: () => void
+  onClick?: () => void
+  onKeypress?: (key: string) => void
 }
 
-function parseAttrs(raw: string): Style {
-  const attrs: Style = {}
-  const attr = /(\w+)\s*=\s*["']([^"']*)["']/g
-  let match: RegExpExecArray | null
-  while ((match = attr.exec(raw))) {
-    const key = match[1].toLowerCase()
-    const value = match[2].trim()
-    if (key === "color" || key === "fg") attrs.color = value
-    if (key === "bg" || key === "background") attrs.bg = value
-  }
-  return attrs
+interface Cell {
+  char: string
+  fg: RGBA | null
+  bg: RGBA | null
+  bold: boolean
+  dim: boolean
+  italic: boolean
+  underline: boolean
+  strikethrough: boolean
 }
 
-function styleCode(color?: string, bg?: string) {
-  const codes: number[] = []
-  const norm = (value?: string) => value?.toLowerCase().replace(/[^a-z]/g, "")
-  const fg = norm(color)
-  const bgKey = norm(bg)
-  if (fg && colorCodes[fg] !== undefined) codes.push(colorCodes[fg])
-  if (bgKey && colorCodes[bgKey] !== undefined) codes.push(colorCodes[bgKey] + 10)
-  return codes.length ? `\x1b[${codes.join(";")}m` : ""
-}
+class ScreenBuffer {
+  width: number
+  height: number
+  cells: Cell[][]
 
-type Token = { kind: "text"; text: string; color?: string; bg?: string } | { kind: "box"; enter: boolean; props: BoxProps }
-
-const mergeStyle = (base: Style, next: Style): Style => ({
-  color: next.color ?? base.color,
-  bg: next.bg ?? base.bg
-})
-
-const normalizeWidth = (value?: number) => (typeof value === "number" && value > 0 ? Math.floor(value) : undefined)
-const normalizePad = (value?: number) => (typeof value === "number" && value > 0 ? Math.floor(value) : 0)
-
-const pushTokens = (node: VNode | string, style: Style, tokens: Token[]) => {
-  if (typeof node === "string") {
-    tokens.push({ kind: "text", text: node, color: style.color, bg: style.bg })
-    return
+  constructor(width: number, height: number) {
+    this.width = width
+    this.height = height
+    this.cells = []
+    this.clear()
   }
-  const nextStyle = mergeStyle(style, node.props)
-  const nodeType = node.type
-  if (nodeType === "box" || nodeType === "div") {
-    const props = {
-      width: normalizeWidth(node.props.width),
-      pad: normalizePad(node.props.pad),
-      block: node.props.block !== false
-    }
-    tokens.push({ kind: "box", enter: true, props })
-    node.children.forEach(child => pushTokens(child, nextStyle, tokens))
-    tokens.push({ kind: "box", enter: false, props })
-    return
-  }
-  node.children.forEach(child => pushTokens(child, nextStyle, tokens))
-}
 
-const segmentsToTokens = (segments: Segment[]): Token[] =>
-  segments.map(segment => ({ kind: "text", text: segment.text, color: segment.color, bg: segment.bg }))
-
-const toTokens = (source: VNode | string | Segment[]): Token[] => {
-  if (typeof source === "string") return segmentsToTokens(parseJsx(source))
-  if (Array.isArray(source)) return segmentsToTokens(source)
-  const tokens: Token[] = []
-  pushTokens(source, {}, tokens)
-  return tokens
-}
-
-type BoxState = { limit: number; pad: number; block: boolean }
-
-function tokensToLines(tokens: Token[], width: number): string[] {
-  const lines: string[] = []
-  let line = ""
-  let col = 0
-  let active = ""
-  let padTotal = 0
-  let limit = Math.max(1, width)
-  const stack: BoxState[] = []
-  const applyPad = () => {
-    if (padTotal && col === 0) {
-      const fill = Math.min(padTotal, limit)
-      line += " ".repeat(fill)
-      col += fill
-    }
+  clear(): void {
+    this.cells = Array.from({ length: this.height }, () =>
+      Array.from({ length: this.width }, () => ({
+        char: " ", fg: null, bg: null, bold: false, dim: false,
+        italic: false, underline: false, strikethrough: false
+      }))
+    )
   }
-  const addRightPad = () => {
-    if (padTotal && col < limit) {
-      const fill = Math.min(padTotal, limit - col)
-      if (fill) {
-        line += " ".repeat(fill)
-        col += fill
-      }
-    }
+
+  resize(width: number, height: number): void {
+    this.width = width
+    this.height = height
+    this.clear()
   }
-  const pushLine = () => {
-    addRightPad()
-    if (active) line += reset
-    lines.push(line + clear)
-    line = active
-    col = 0
-    applyPad()
+
+  setCell(x: number, y: number, char: string, style: Partial<Cell>): void {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return
+    const cell = this.cells[y][x]
+    cell.char = char
+    if (style.fg !== undefined) cell.fg = style.fg
+    if (style.bg !== undefined) cell.bg = style.bg
+    if (style.bold !== undefined) cell.bold = style.bold
+    if (style.dim !== undefined) cell.dim = style.dim
+    if (style.italic !== undefined) cell.italic = style.italic
+    if (style.underline !== undefined) cell.underline = style.underline
+    if (style.strikethrough !== undefined) cell.strikethrough = style.strikethrough
   }
-  applyPad()
-  for (const token of tokens) {
-    if (token.kind === "box") {
-      if (token.enter) {
-        const block = token.props.block !== false
-        if (block && col > 0) pushLine()
-        const nextLimit = token.props.width ? Math.min(limit, token.props.width) : limit
-        stack.push({ limit: nextLimit, pad: token.props.pad ?? 0, block })
-        padTotal += token.props.pad ?? 0
-        limit = nextLimit
-        if (col >= limit) pushLine()
-        applyPad()
-      } else {
-        const last = stack.pop()
-        if (last) {
-          padTotal -= last.pad
-          limit = stack.length ? stack[stack.length - 1].limit : Math.max(1, width)
-          if (last.block && col > 0) pushLine()
-          if (col >= limit) pushLine()
-          applyPad()
-        }
-      }
-      continue
-    }
-    const style = styleCode(token.color, token.bg)
-    if (style !== active) {
-      if (active) line += reset
-      if (style) line += style
-      active = style
-    }
-    for (const ch of token.text) {
-      if (ch === "\r") continue
-      if (ch === "\n") {
-        pushLine()
-        continue
-      }
-      if (col >= limit) pushLine()
-      line += ch
+
+  writeText(x: number, y: number, text: string, style: Partial<Cell>, maxWidth?: number): number {
+    let col = x
+    const limit = maxWidth !== undefined ? Math.min(x + maxWidth, this.width) : this.width
+    for (const ch of text) {
+      if (ch === "\n" || ch === "\r") continue
+      if (col >= limit) break
+      this.setCell(col, y, ch, style)
       col++
     }
+    return col - x
   }
-  if (line.length || !lines.length) {
-    addRightPad()
-    if (active) line += reset
-    lines.push(line + clear)
+
+  fillRect(x: number, y: number, w: number, h: number, char: string, style: Partial<Cell>): void {
+    for (let row = y; row < y + h && row < this.height; row++) {
+      for (let col = x; col < x + w && col < this.width; col++) {
+        if (col >= 0 && row >= 0) this.setCell(col, row, char, style)
+      }
+    }
   }
-  return lines
+
+  drawBorder(x: number, y: number, w: number, h: number, borderStyle: BorderStyle, style: Partial<Cell>): void {
+    if (borderStyle === "none" || w < 2 || h < 2) return
+    const chars = getBorderChars(borderStyle)
+    this.setCell(x, y, chars.tl, style)
+    this.setCell(x + w - 1, y, chars.tr, style)
+    this.setCell(x, y + h - 1, chars.bl, style)
+    this.setCell(x + w - 1, y + h - 1, chars.br, style)
+    for (let col = x + 1; col < x + w - 1; col++) {
+      this.setCell(col, y, chars.h, style)
+      this.setCell(col, y + h - 1, chars.h, style)
+    }
+    for (let row = y + 1; row < y + h - 1; row++) {
+      this.setCell(x, row, chars.v, style)
+      this.setCell(x + w - 1, row, chars.v, style)
+    }
+  }
+
+  render(): string {
+    const lines: string[] = []
+    for (let y = 0; y < this.height; y++) {
+      let line = ""
+      let lastFg: RGBA | null = null
+      let lastBg: RGBA | null = null
+      let lastBold = false
+      let lastDim = false
+      let lastItalic = false
+      let lastUnderline = false
+      let lastStrike = false
+
+      for (let x = 0; x < this.width; x++) {
+        const cell = this.cells[y][x]
+        let codes = ""
+
+        const fgChanged = cell.fg !== lastFg && (cell.fg === null || lastFg === null ||
+          cell.fg.r !== lastFg.r || cell.fg.g !== lastFg.g || cell.fg.b !== lastFg.b)
+        const bgChanged = cell.bg !== lastBg && (cell.bg === null || lastBg === null ||
+          cell.bg.r !== lastBg.r || cell.bg.g !== lastBg.g || cell.bg.b !== lastBg.b)
+        const attrChanged = cell.bold !== lastBold || cell.dim !== lastDim ||
+          cell.italic !== lastItalic || cell.underline !== lastUnderline || cell.strikethrough !== lastStrike
+
+        if (fgChanged || bgChanged || attrChanged) {
+          codes += reset
+          if (cell.fg) codes += toAnsiFg(cell.fg)
+          if (cell.bg) codes += toAnsiBg(cell.bg)
+          if (cell.bold) codes += bold
+          if (cell.dim) codes += dim
+          if (cell.italic) codes += italic
+          if (cell.underline) codes += underline
+          if (cell.strikethrough) codes += strikethrough
+        }
+
+        line += codes + cell.char
+        lastFg = cell.fg
+        lastBg = cell.bg
+        lastBold = cell.bold
+        lastDim = cell.dim
+        lastItalic = cell.italic
+        lastUnderline = cell.underline
+        lastStrike = cell.strikethrough
+      }
+      lines.push(line + reset)
+    }
+    return lines.join("\n")
+  }
 }
 
-export function renderLines(source: VNode | string | Segment[], width?: number) {
-  return tokensToLines(toTokens(source), width ?? process.stdout.columns ?? 80)
+interface RenderContext {
+  buffer: ScreenBuffer
+  x: number
+  y: number
+  width: number
+  height: number
+  style: StyleProps
+  scrollX: number
+  scrollY: number
 }
 
-export function run(source: VNode | string | Segment[]) {
+interface ElementPosition {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+  node: VNode
+}
+
+let elementPositions: ElementPosition[] = []
+let boxPositions: Map<string, { x: number; y: number; width: number; height: number }> = new Map()
+
+function mergeStyle(base: StyleProps, node: VNode): StyleProps {
+  return {
+    color: node.props.color ?? base.color,
+    bg: node.props.bg ?? base.bg,
+    bold: node.props.bold ?? base.bold,
+    dim: node.props.dim ?? base.dim,
+    italic: node.props.italic ?? base.italic,
+    underline: node.props.underline ?? base.underline,
+    strikethrough: node.props.strikethrough ?? base.strikethrough
+  }
+}
+
+function getStyleCell(style: StyleProps): Partial<Cell> {
+  return {
+    fg: parseColor(style.color),
+    bg: parseColor(style.bg),
+    bold: style.bold ?? false,
+    dim: style.dim ?? false,
+    italic: style.italic ?? false,
+    underline: style.underline ?? false,
+    strikethrough: style.strikethrough ?? false
+  }
+}
+
+function measureContent(node: VNode | string, maxWidth: number): { width: number; height: number } {
+  if (typeof node === "string") {
+    const lines = node.split("\n")
+    const height = lines.length
+    const width = Math.max(...lines.map(l => l.length))
+    return { width: Math.min(width, maxWidth), height }
+  }
+
+  const nodeType = node.type.toLowerCase()
+  const props = node.props || {}
+
+  const explicitW = resolveUnit(parseUnit(props.width), maxWidth)
+  const explicitH = resolveUnit(parseUnit(props.height), 100)
+  const [pt, pr, pb, pl] = parsePadding(props.padding)
+  const [mt, mr, mb, ml] = parsePadding(props.margin)
+  const borderSize = props.border && props.border !== "none" ? 1 : 0
+
+  let totalHeight = 0
+  let maxLineWidth = 0
+
+  for (const child of node.children) {
+    const m = measureContent(child, explicitW || maxWidth)
+    if (nodeType === "box" || nodeType === "text" || nodeType === "span") {
+      if (props.flexDirection === "row") {
+        maxLineWidth += m.width
+        totalHeight = Math.max(totalHeight, m.height)
+      } else {
+        totalHeight += m.height
+        maxLineWidth = Math.max(maxLineWidth, m.width)
+      }
+    } else {
+      totalHeight += m.height
+      maxLineWidth = Math.max(maxLineWidth, m.width)
+    }
+  }
+
+  const contentW = explicitW || (maxLineWidth + pl + pr + borderSize * 2)
+  const contentH = explicitH || (totalHeight + pt + pb + borderSize * 2)
+
+  return { width: Math.min(contentW + ml + mr, maxWidth), height: Math.max(1, contentH + mt + mb) }
+}
+
+function renderNode(node: VNode | string, ctx: RenderContext): void {
+  if (typeof node === "string") {
+    const cellStyle = getStyleCell(ctx.style)
+    const lines = node.split("\n")
+    let row = ctx.y
+    for (const line of lines) {
+      if (row >= ctx.y + ctx.height) break
+      if (row >= 0 && row < ctx.buffer.height) {
+        ctx.buffer.writeText(ctx.x, row, line, cellStyle, ctx.width)
+      }
+      row++
+    }
+    return
+  }
+
+  const nodeType = node.type.toLowerCase()
+  const style = mergeStyle(ctx.style, node)
+
+  if (nodeType === "br") {
+    return
+  }
+
+  if (nodeType === "hr") {
+    const hrColor = parseColor(node.props.color || style.color)
+    const char = node.props.char || "─"
+    const w = resolveUnit(parseUnit(node.props.width), ctx.width) || ctx.width
+    ctx.buffer.writeText(ctx.x, ctx.y, char.repeat(w), { fg: hrColor })
+    return
+  }
+
+  if (nodeType === "input") {
+    const id = node.props.id || node.props.name || `input_${ctx.x}_${ctx.y}`
+    let state = getElement<InputState>(id)
+    if (!state) {
+      state = createInputState(id, node.props.value || "", node.props.placeholder || "")
+      if (node.props.type === "password") state.mask = "•"
+    }
+    registerElement(state)
+    const w = resolveUnit(parseUnit(node.props.width), ctx.width) || 20
+    const rendered = renderInput(state, w)
+    const cellStyle = getStyleCell(style)
+    ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle, w)
+    elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
+    registerRegion({
+      id, x: ctx.x, y: ctx.y, width: w, height: 1,
+      onPress: () => focusElement(id)
+    })
+    return
+  }
+
+  if (nodeType === "button") {
+    const id = node.props.id || `btn_${ctx.x}_${ctx.y}`
+    let state = getElement<ButtonState>(id)
+    if (!state) {
+      state = createButtonState(id)
+    }
+    registerElement(state)
+    state.hovered = getHoveredId() === id
+    const label = node.children.map(c => typeof c === "string" ? c : "").join("")
+    const w = resolveUnit(parseUnit(node.props.width), ctx.width) || (label.length + 4)
+    const rendered = renderButton(label, state, w)
+    const cellStyle = getStyleCell(style)
+    if (state.hovered) {
+      cellStyle.bg = parseColor(node.props.hoverBg || node.props.bg)
+    }
+    ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle, w)
+    elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
+    registerRegion({
+      id, x: ctx.x, y: ctx.y, width: w, height: 1,
+      onPress: () => { state!.pressed = true; focusElement(id) },
+      onRelease: (e) => {
+        state!.pressed = false
+        const region = findRegionAt(e.x, e.y)
+        if (region?.id === id) {
+          node.props.onClick?.()
+        }
+      }
+    })
+    return
+  }
+
+  if (nodeType === "select") {
+    const id = node.props.id || node.props.name || `sel_${ctx.x}_${ctx.y}`
+    const options = node.children
+      .filter((c): c is VNode => typeof c !== "string" && c.type === "option")
+      .map(c => ({
+        value: c.props.value || c.children.join(""),
+        label: c.children.map(ch => typeof ch === "string" ? ch : "").join("")
+      }))
+    let state = getElement<SelectState>(id)
+    if (!state) {
+      state = createSelectState(id, options, node.props.value)
+    }
+    registerElement(state)
+    const w = resolveUnit(parseUnit(node.props.width), ctx.width) || 20
+    const lines = renderSelect(state, w)
+    const cellStyle = getStyleCell(style)
+    lines.forEach((line, i) => ctx.buffer.writeText(ctx.x, ctx.y + i, line, cellStyle, w))
+    elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: lines.length, node })
+    registerRegion({
+      id, x: ctx.x, y: ctx.y, width: w, height: lines.length,
+      onPress: (e) => {
+        focusElement(id)
+        if (state!.open) {
+          const relativeY = e.y - ctx.y
+          if (relativeY >= 1 && relativeY <= state!.options.length) {
+            state!.highlightIndex = relativeY - 1
+            state!.value = state!.options[state!.highlightIndex].value
+            state!.open = false
+          } else if (relativeY === 0) {
+            state!.open = false
+          }
+        } else {
+          state!.open = true
+        }
+      }
+    })
+    return
+  }
+
+  if (nodeType === "checkbox") {
+    const id = node.props.id || node.props.name || `chk_${ctx.x}_${ctx.y}`
+    const label = node.props.label || node.children.map(c => typeof c === "string" ? c : "").join("")
+    let state = getElement<CheckboxState>(id)
+    if (!state) {
+      state = createCheckboxState(id, node.props.checked || false, label)
+    }
+    registerElement(state)
+    const rendered = renderCheckbox(state)
+    const cellStyle = getStyleCell(style)
+    ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle)
+    const w = rendered.length
+    elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
+    registerRegion({
+      id, x: ctx.x, y: ctx.y, width: w, height: 1,
+      onPress: () => {
+        focusElement(id)
+        state!.checked = !state!.checked
+        state!.value = state!.checked
+        node.props.onChange?.(state!.checked)
+      }
+    })
+    return
+  }
+
+  if (nodeType === "ul" || nodeType === "ol") {
+    const id = node.props.id || `list_${ctx.x}_${ctx.y}`
+    const items = node.children
+      .filter((c): c is VNode => typeof c !== "string" && c.type === "li")
+      .map(c => c.children.map(ch => typeof ch === "string" ? ch : "").join(""))
+    let state = getElement<ListState>(id)
+    if (!state) {
+      state = createListState(id, items, nodeType === "ol")
+    }
+    registerElement(state)
+    const lines = renderList(state, ctx.width)
+    const cellStyle = getStyleCell(style)
+    lines.forEach((line, i) => ctx.buffer.writeText(ctx.x, ctx.y + i, line, cellStyle))
+    elementPositions.push({ id, x: ctx.x, y: ctx.y, width: ctx.width, height: lines.length, node })
+    registerRegion({
+      id, x: ctx.x, y: ctx.y, width: ctx.width, height: lines.length,
+      onPress: (e) => {
+        focusElement(id)
+        state!.selectedIndex = e.y - ctx.y
+      }
+    })
+    return
+  }
+
+  if (nodeType === "table") {
+    const id = node.props.id || `tbl_${ctx.x}_${ctx.y}`
+    const thead = node.children.find((c): c is VNode => typeof c !== "string" && c.type === "thead")
+    const tbody = node.children.find((c): c is VNode => typeof c !== "string" && c.type === "tbody")
+    const headerCells = thead?.children
+      .filter((c): c is VNode => typeof c !== "string" && c.type === "tr")[0]?.children
+      .filter((c): c is VNode => typeof c !== "string" && (c.type === "th" || c.type === "td"))
+      .map(c => c.children.map(ch => typeof ch === "string" ? ch : "").join("")) || []
+    const bodyRows = tbody?.children
+      .filter((c): c is VNode => typeof c !== "string" && c.type === "tr")
+      .map(tr => tr.children
+        .filter((c): c is VNode => typeof c !== "string" && (c.type === "td" || c.type === "th"))
+        .map(c => c.children.map(ch => typeof ch === "string" ? ch : "").join(""))
+      ) || []
+    let state = getElement<TableState>(id)
+    if (!state) {
+      state = createTableState(id, headerCells, bodyRows)
+      registerElement(state)
+    }
+    const colWidths = headerCells.map((h, i) => {
+      const maxBody = Math.max(...bodyRows.map(r => (r[i] || "").length), 0)
+      return Math.max(h.length, maxBody, 5)
+    })
+    const lines = renderTable(state, colWidths)
+    const cellStyle = getStyleCell(style)
+    lines.forEach((line, i) => ctx.buffer.writeText(ctx.x, ctx.y + i, line, cellStyle))
+    return
+  }
+
+  if (nodeType === "form") {
+    let row = ctx.y
+    for (const child of node.children) {
+      if (typeof child === "string") {
+        ctx.buffer.writeText(ctx.x, row, child, getStyleCell(style))
+        row++
+      } else {
+        renderNode(child, { ...ctx, y: row, style })
+        const measured = measureContent(child, ctx.width)
+        row += measured.height
+      }
+    }
+    return
+  }
+
+  if (nodeType === "box" || nodeType === "text" || nodeType === "span" || nodeType === Fragment) {
+    const props = node.props as BoxProps
+    const id = props.id
+    const content = measureContent(node, ctx.width)
+    const layout = calculateLayout(props, ctx.width, ctx.height, content.width, content.height)
+
+    const [mt, mr, mb, ml] = parsePadding(props.margin)
+    const boxX = ctx.x + (props.left || 0) + ml
+    const boxY = ctx.y + (props.top || 0) + mt
+    const availW = ctx.width - ml - mr
+    const availH = ctx.height - mt - mb
+    const boxW = resolveUnit(parseUnit(props.width), availW) || availW
+    const boxH = resolveUnit(parseUnit(props.height), availH) || content.height + (props.border && props.border !== "none" ? 2 : 0) + (parsePadding(props.padding)[0] + parsePadding(props.padding)[2])
+
+    const cellStyle = getStyleCell(style)
+    const isHovered = id ? getHoveredId() === id : false
+
+    if (isHovered && props.hoverBg) {
+      cellStyle.bg = parseColor(props.hoverBg)
+    }
+
+    if (cellStyle.bg) {
+      ctx.buffer.fillRect(boxX, boxY, boxW, boxH, " ", cellStyle)
+    }
+
+    if (props.border && props.border !== "none") {
+      const borderColor = parseColor(props.borderColor || style.color)
+      ctx.buffer.drawBorder(boxX, boxY, boxW, boxH, props.border, { fg: borderColor })
+    }
+
+    const [pt, pr, pb, pl] = parsePadding(props.padding)
+    const borderOffset = props.border && props.border !== "none" ? 1 : 0
+    const innerX = boxX + borderOffset + pl
+    const innerY = boxY + borderOffset + pt
+    const innerW = Math.max(1, boxW - borderOffset * 2 - pl - pr)
+    const innerH = Math.max(1, boxH - borderOffset * 2 - pt - pb)
+
+    if (id) {
+      boxPositions.set(id, { x: boxX, y: boxY, width: boxW, height: boxH })
+      const isClickable = !!props.onClick
+      if (props.focusable || isClickable || props.resizable || props.movable) {
+        if (props.focusable) {
+          registerElement({ id, type: "box", focused: false, disabled: false, value: null })
+        }
+        elementPositions.push({ id, x: boxX, y: boxY, width: boxW, height: boxH, node })
+        registerRegion({
+          id, x: boxX, y: boxY, width: boxW, height: boxH,
+          resizable: props.resizable,
+          movable: props.movable,
+          onPress: () => {
+            if (props.focusable) focusElement(id)
+          },
+          onRelease: (e) => {
+            const region = findRegionAt(e.x, e.y)
+            if (region?.id === id) {
+              props.onClick?.()
+            }
+          }
+        })
+      }
+    }
+
+    const hasFlexDirection = props.flexDirection !== undefined
+    const display: Display = props.display || (hasFlexDirection ? "flex" : "block")
+    const isScrollable = props.overflow === "scroll"
+
+    if (display === "flex") {
+      const childLayouts = node.children.map(child => {
+        const m = measureContent(child, innerW)
+        return { x: 0, y: 0, width: m.width, height: m.height, innerX: 0, innerY: 0, innerWidth: m.width, innerHeight: m.height, scrollX: 0, scrollY: 0, contentWidth: m.width, contentHeight: m.height }
+      })
+      const childProps = node.children.map(child => typeof child === "string" ? {} : child.props || {})
+      layoutFlexChildren(childLayouts, innerW, innerH, props, childProps)
+      node.children.forEach((child, i) => {
+        const cl = childLayouts[i]
+        renderNode(child, { ...ctx, x: innerX + cl.x, y: innerY + cl.y, width: cl.width, height: cl.height, style })
+      })
+    } else if (display === "grid") {
+      const childLayouts = node.children.map(child => {
+        const m = measureContent(child, innerW)
+        return { x: 0, y: 0, width: m.width, height: m.height, innerX: 0, innerY: 0, innerWidth: m.width, innerHeight: m.height, scrollX: 0, scrollY: 0, contentWidth: m.width, contentHeight: m.height }
+      })
+      layoutGridChildren(childLayouts, innerW, innerH, props)
+      node.children.forEach((child, i) => {
+        const cl = childLayouts[i]
+        renderNode(child, { ...ctx, x: innerX + cl.x, y: innerY + cl.y, width: cl.width, height: cl.height, style })
+      })
+    } else {
+      let row = innerY
+      const align: TextAlign = props.textAlign || "left"
+      for (const child of node.children) {
+        if (row >= innerY + innerH) break
+        if (typeof child === "string") {
+          const lines = child.split("\n")
+          for (const line of lines) {
+            if (row >= innerY + innerH) break
+            let textX = innerX
+            if (align === "center") textX = innerX + Math.floor((innerW - line.length) / 2)
+            else if (align === "right") textX = innerX + innerW - line.length
+            ctx.buffer.writeText(Math.max(innerX, textX), row, line, cellStyle, innerW)
+            row++
+          }
+        } else {
+          renderNode(child, { ...ctx, x: innerX, y: row, width: innerW, height: innerH - (row - innerY), style })
+          const m = measureContent(child, innerW)
+          row += m.height
+        }
+      }
+    }
+
+    if (isScrollable && content.height > innerH) {
+      const scrollRatio = innerH / content.height
+      const thumbSize = Math.max(1, Math.floor(scrollRatio * innerH))
+      const thumbPos = Math.floor((ctx.scrollY / (content.height - innerH)) * (innerH - thumbSize))
+      for (let i = 0; i < innerH; i++) {
+        const char = i >= thumbPos && i < thumbPos + thumbSize ? "█" : "░"
+        ctx.buffer.setCell(boxX + boxW - 1, innerY + i, char, { fg: parseColor("gray") })
+      }
+    }
+
+    return
+  }
+
+  for (const child of node.children) {
+    renderNode(child, { ...ctx, style })
+  }
+}
+
+export function renderLines(source: VNode, width?: number, height?: number): string[] {
+  const w = width ?? process.stdout.columns ?? 80
+  const h = height ?? process.stdout.rows ?? 24
+  const buffer = new ScreenBuffer(w, h)
+  elementPositions = []
+  boxPositions.clear()
+  clearRegions()
+
+  renderNode(source, {
+    buffer, x: 0, y: 0, width: w, height: h,
+    style: {}, scrollX: 0, scrollY: 0
+  })
+
+  return buffer.render().split("\n")
+}
+
+export interface RunOptions {
+  onExit?: () => void
+  onUpdate?: (tree: VNode) => VNode
+}
+
+export function run(source: VNode, options?: RunOptions) {
   if (!process.stdout.isTTY || !process.stdin.isTTY) return () => { }
+
   const out = process.stdout
-  const tokens = toTokens(source)
-  out.write("\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l")
+  let tree = source
   let width = out.columns || 80
   let height = out.rows || 24
-  let lines = tokensToLines(tokens, width)
-  let offset = 0
+  let scrollY = 0
+  let running = true
+
+  const buffer = new ScreenBuffer(width, height)
+
+  out.write("\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l")
+  out.write(enableMouse())
+
   const draw = () => {
-    const max = Math.max(0, lines.length - height)
-    offset = Math.max(0, Math.min(offset, max))
-    out.write("\x1b[H" + lines.slice(offset, offset + height).join("\n") + "\x1b[0J")
+    if (!running) return
+    elementPositions = []
+    boxPositions.clear()
+    clearRegions()
+    resetFocusOrder()
+    buffer.clear()
+
+    renderNode(tree, {
+      buffer, x: 0, y: 0, width, height,
+      style: {}, scrollX: 0, scrollY
+    })
+
+    out.write("\x1b[H" + buffer.render())
   }
+
   const exit = () => {
+    if (!running) return
+    running = false
+    out.write(disableMouse())
     out.write("\x1b[0m\x1b[?25h\x1b[?1049l")
-    process.stdin.off("data", onKey).setRawMode(false).pause()
+    process.stdin.off("data", onData).setRawMode(false).pause()
     out.off("resize", onResize)
+    options?.onExit?.()
   }
+
   const onResize = () => {
     width = out.columns || 80
     height = out.rows || 24
-    lines = tokensToLines(tokens, width)
+    buffer.resize(width, height)
     draw()
   }
-  const onKey = (buf: Buffer) => {
+
+  const onData = (buf: Buffer) => {
+    const mouseEvents = parseMouseEvent(buf)
+    if (mouseEvents.length > 0) {
+      mouseEvents.forEach(e => {
+        if (e.button === "scroll-up") scrollY = Math.max(0, scrollY - 2)
+        else if (e.button === "scroll-down") scrollY += 2
+        else processMouseEvent(e)
+      })
+      draw()
+      return
+    }
+
     const key = buf.toString()
-    if (key === "\u0003" || key === "q" || key === "\x1b") return exit()
-    if (key === "\x1b[A" || key === "k") offset -= 1
-    else if (key === "\x1b[B" || key === "j") offset += 1
-    else if (key === "\x1b[5~") offset -= height
-    else if (key === "\x1b[6~") offset += height
-    else if (key === "\x1b[H") offset = 0
-    else if (key === "\x1b[F") offset = Math.max(0, lines.length - height)
-    else return
+
+    if (key === "\u0003" || key === "\x1b") {
+      exit()
+      return
+    }
+
+    const parsed = parseKey(buf)
+
+    if (parsed.key === "tab" && !parsed.shift) {
+      focusNext()
+      draw()
+      return
+    }
+
+    if (parsed.key === "tab" && parsed.shift) {
+      focusPrev()
+      draw()
+      return
+    }
+
+    const focused = getFocusedElement()
+    if (focused) {
+      if (focused.type === "input") {
+        if (handleInputKey(focused as InputState, key)) {
+          draw()
+          return
+        }
+      }
+      if (focused.type === "select") {
+        if (handleSelectKey(focused as SelectState, key)) {
+          draw()
+          return
+        }
+      }
+      if (focused.type === "checkbox") {
+        if (handleCheckboxKey(focused as CheckboxState, key)) {
+          draw()
+          return
+        }
+      }
+      if (focused.type === "button" && (key === "\r" || key === " ")) {
+        const pos = elementPositions.find(p => p.id === focused.id)
+        if (pos?.node.props.onClick) pos.node.props.onClick()
+        draw()
+        return
+      }
+    }
+
+    if (parsed.key === "up") scrollY = Math.max(0, scrollY - 1)
+    else if (parsed.key === "down") scrollY++
+    else if (parsed.key === "pageup") scrollY = Math.max(0, scrollY - height)
+    else if (parsed.key === "pagedown") scrollY += height
+    else if (key === "q") { exit(); return }
+
     draw()
   }
-  process.stdin.setRawMode(true).resume().on("data", onKey)
+
+  process.stdin.setRawMode(true).resume().on("data", onData)
   out.on("resize", onResize)
   draw()
+
   return exit
 }
+
+export { parseColor, toAnsiFg, toAnsiBg } from "./colors"
+export type { RGBA } from "./colors"
+export type { LayoutProps, BorderStyle } from "./layout"

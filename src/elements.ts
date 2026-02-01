@@ -98,7 +98,7 @@ export function generateId(prefix: string): string {
 
 export function registerElement(state: ElementState): void {
   elementRegistry.set(state.id, state)
-  if (!focusOrder.includes(state.id)) focusOrder.push(state.id)
+  focusOrder.push(state.id)
 }
 
 export function unregisterElement(id: string): void {
@@ -146,6 +146,10 @@ export function clearRegistry(): void {
   elementRegistry.clear()
   focusOrder = []
   currentFocusIndex = -1
+}
+
+export function resetFocusOrder(): void {
+  focusOrder = []
 }
 
 export function createInputState(id: string, value = "", placeholder = ""): InputState {
