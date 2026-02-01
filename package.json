@@ -1,0 +1,21 @@
+{
+  "name": "tui-kit",
+  "version": "0.1.0",
+  "description": "Minimal terminal UI toolkit (JSX-style text renderer)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "demo": "ts-node --project tsconfig.json --files test/demo.tsx",
+    "prepare": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.4.0"
+  }
+}
