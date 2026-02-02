@@ -31,7 +31,9 @@ const formatKey = (key: KeyEvent): string => {
 };
 
 let setLastKey: ((value: string) => void) | null = null;
-let setPageScroll: ((value: number | ((prev: number) => number)) => void) | null = null;
+let setPageScroll:
+  | ((value: number | ((prev: number) => number)) => void)
+  | null = null;
 
 // Demo App Component
 const App = () => {
@@ -325,7 +327,8 @@ const App = () => {
         padding={[1, 0]}
       >
         <text dim color="#666">
-          Tab to navigate • Enter/Space to activate • Ctrl+↑/↓ page scroll • q/Esc exit
+          Tab to navigate • Enter/Space to activate • Ctrl+↑/↓ page scroll •
+          q/Esc exit
         </text>
       </box>
     </box>
