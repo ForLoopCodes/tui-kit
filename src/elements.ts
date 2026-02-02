@@ -289,7 +289,7 @@ export function createTableState(id: string, headers: string[], rows: string[][]
 
 export function handleInputKey(state: InputState, key: string): boolean {
   if (state.disabled) return false
-  
+
   if (key === "\x7f" || key === "\b") {
     if (state.cursor > 0) {
       state.value = state.value.slice(0, state.cursor - 1) + state.value.slice(state.cursor)
@@ -297,46 +297,46 @@ export function handleInputKey(state: InputState, key: string): boolean {
     }
     return true
   }
-  
+
   if (key === "\x1b[D") {
     if (state.cursor > 0) state.cursor--
     return true
   }
-  
+
   if (key === "\x1b[C") {
     if (state.cursor < state.value.length) state.cursor++
     return true
   }
-  
+
   if (key === "\x1b[H") {
     state.cursor = 0
     return true
   }
-  
+
   if (key === "\x1b[F") {
     state.cursor = state.value.length
     return true
   }
-  
+
   if (key === "\x1b[3~") {
     if (state.cursor < state.value.length) {
       state.value = state.value.slice(0, state.cursor) + state.value.slice(state.cursor + 1)
     }
     return true
   }
-  
+
   if (key.length === 1 && key.charCodeAt(0) >= 32) {
     state.value = state.value.slice(0, state.cursor) + key + state.value.slice(state.cursor)
     state.cursor++
     return true
   }
-  
+
   return false
 }
 
 export function handleSelectKey(state: SelectState, key: string): boolean {
   if (state.disabled) return false
-  
+
   if (key === "\r" || key === " ") {
     if (state.open) {
       state.value = state.options[state.highlightIndex]?.value ?? state.value
@@ -348,34 +348,34 @@ export function handleSelectKey(state: SelectState, key: string): boolean {
     }
     return true
   }
-  
+
   if (key === "\x1b[A" && state.open) {
     state.highlightIndex = Math.max(0, state.highlightIndex - 1)
     return true
   }
-  
+
   if (key === "\x1b[B" && state.open) {
     state.highlightIndex = Math.min(state.options.length - 1, state.highlightIndex + 1)
     return true
   }
-  
+
   if (key === "\x1b" && state.open) {
     state.open = false
     return true
   }
-  
+
   return false
 }
 
 export function handleCheckboxKey(state: CheckboxState, key: string): boolean {
   if (state.disabled) return false
-  
+
   if (key === " " || key === "\r") {
     state.checked = !state.checked
     state.value = state.checked
     return true
   }
-  
+
   return false
 }
 
@@ -404,9 +404,9 @@ export function renderSelect(state: SelectState, width: number): string[] {
   const current = state.options.find(o => o.value === state.value)?.label || state.value
   const arrow = state.open ? "▲" : "▼"
   const header = `[${current.slice(0, width - 4).padEnd(width - 4)}${arrow}]`
-  
+
   if (!state.open) return [header]
-  
+
   const lines = [header]
   state.options.forEach((opt, i) => {
     const prefix = i === state.highlightIndex ? ">" : " "
@@ -446,7 +446,7 @@ export function renderTable(state: TableState, colWidths: number[]): string[] {
   const lines: string[] = []
   const sep = "│"
   const hline = "─"
-  
+
   const renderRow = (cells: string[], isHeader = false, rowIdx = -1): string => {
     return sep + cells.map((cell, ci) => {
       const w = colWidths[ci] || 10
@@ -455,11 +455,11 @@ export function renderTable(state: TableState, colWidths: number[]): string[] {
       return isSelected ? `\x1b[7m${padded}\x1b[27m` : padded
     }).join(sep) + sep
   }
-  
+
   const border = "┌" + colWidths.map(w => hline.repeat(w)).join("┬") + "┐"
   const midBorder = "├" + colWidths.map(w => hline.repeat(w)).join("┼") + "┤"
   const bottomBorder = "└" + colWidths.map(w => hline.repeat(w)).join("┴") + "┘"
-  
+
   lines.push(border)
   if (state.headers.length) {
     lines.push(renderRow(state.headers, true))
@@ -467,6 +467,6 @@ export function renderTable(state: TableState, colWidths: number[]): string[] {
   }
   state.rows.forEach((row, ri) => lines.push(renderRow(row, false, ri)))
   lines.push(bottomBorder)
-  
+
   return lines
 }

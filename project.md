@@ -100,12 +100,16 @@ and consistent with web-like styling and layout principles.
 ```tsx
 const App = () => (
   <box width="100%" height="100%" flexDirection="column">
-    <text bold color="#e94560">tui-kit</text>
+    <text bold color="#e94560">
+      tui-kit
+    </text>
     <input id="name" tabIndex={1} placeholder="type name..." />
-    <button id="ok" tabIndex={2} onClick={() => console.log("click")}>OK</button>
+    <button id="ok" tabIndex={2} onClick={() => console.log("click")}>
+      OK
+    </button>
   </box>
-)
-run(<App />)
+);
+run(<App />);
 ```
 
 ## Examples & Demos 🧪
@@ -157,7 +161,7 @@ run(<App />)
 - Licensed under MIT — please see `LICENSE` for details.
 - Credits to contributors for feature ideas and test cases.
 
-----
+---
 
 If you'd like, I can add a short 'quick start' section with copyable commands
 or expand the API reference into a dedicated `API.md` file.
