@@ -4,7 +4,7 @@
 
 // Core exports
 export { createElement, Fragment, VNode, Child, StyleProps } from './elements';
-export { useState, setRerenderCallback } from './elements';
+export { useState, useNavigation, setRerenderCallback } from './elements';
 
 // App runtime
 export { run, createApp, renderLines, App, AppConfig } from './app';
@@ -64,6 +64,7 @@ export {
   InputProps,
   TextboxProps,
   ButtonProps,
+  LinkProps,
   SelectProps,
   OptionProps,
   CheckboxProps,

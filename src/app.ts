@@ -6,6 +6,7 @@ import { ScreenBuffer, renderLayout, Terminal } from './render';
 import { layout, LayoutNode, findFocusable, parseSpacing, getBorderThickness } from './layout';
 import { InputHandler, setGlobalKeybindManager, KeyEvent, MouseEvent } from './input';
 import { VNode, renderVNode, setRerenderCallback, createComponentContext, runWithHooks, StyleProps } from './elements';
+import { renderCurrentRoute, setNavigationCallback, initRouter, RouterConfig, getCurrentComponent } from './router';
 
 /**
  * App configuration
@@ -21,6 +22,8 @@ export interface AppConfig {
   height?: number;
   /** Frame rate limit */
   fps?: number;
+  /** Routes configuration for multi-page apps */
+  routes?: RouterConfig;
 }
 
 /**
@@ -69,6 +72,7 @@ export function createApp(
     width = process.stdout.columns || 80,
     height = process.stdout.rows || 24,
     fps = 60,
+    routes,
   } = config;
 
   // Create screen buffer
@@ -79,6 +83,11 @@ export function createApp(
 
   // Set global keybind manager
   setGlobalKeybindManager(input.getKeybindManager());
+
+  // Initialize router if routes are provided
+  if (routes) {
+    initRouter(routes);
+  }
 
   // Element states
   const elementStates = new Map<string, ElementState>();
@@ -123,6 +132,11 @@ export function createApp(
     requestRender();
   });
 
+  // Set navigation callback for router
+  setNavigationCallback(() => {
+    requestRender();
+  });
+
   // Render function
   const render = () => {
     if (!isRunning || !dirty) return;
@@ -137,8 +151,21 @@ export function createApp(
     // Clear buffer
     buffer.clear();
 
-    // Get root node
-    const root = getRootVNode();
+    // Get root node (from router if routes configured, otherwise from rootElement)
+    let root: VNode | null = null;
+    if (routes) {
+      const component = getCurrentComponent();
+      if (component) {
+        root = runWithHooks(componentContext, component);
+      }
+    } else {
+      root = getRootVNode();
+    }
+
+    if (!root) {
+      console.error('No root element to render');
+      return;
+    }
 
     // Render virtual DOM
     const rendered = renderVNode(root) as VNode;

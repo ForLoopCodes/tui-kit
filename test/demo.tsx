@@ -2,11 +2,18 @@
 /** @jsx createElement */
 /** @jsxFrag Fragment */
 /**
- * TUI Kit Demo - Showcases colors, buttons, inputs, and layout
+ * TUI Kit Demo - Multi-page app with routing
  */
 
-import { createApp, createElement, Fragment, useState, KeyEvent } from "../src";
-// Provide compatibility for JSX runtime (some runners emit React.createElement)
+import {
+  createApp,
+  createElement,
+  Fragment,
+  useState,
+  useNavigation,
+  KeyEvent,
+} from "../src";
+// Provide compatibility for JSX runtime
 (globalThis as any).React = { createElement, Fragment };
 
 const formatKey = (key: KeyEvent): string => {
@@ -31,29 +38,18 @@ const formatKey = (key: KeyEvent): string => {
 };
 
 let setLastKey: ((value: string) => void) | null = null;
-let setPageScroll:
-  | ((value: number | ((prev: number) => number)) => void)
-  | null = null;
 
-// Demo App Component
-const App = () => {
-  const [lastKey, setLastKeyState] = useState("");
-  const [pageScroll, setPageScrollState] = useState(0);
-  setLastKey = setLastKeyState;
-  setPageScroll = setPageScrollState;
+// Home Page
+const HomePage = () => {
+  const { navigate } = useNavigation();
 
   return (
     <box
-      id="page"
       width="100%"
       height="100%"
       flexDirection="column"
       padding={1}
       bg="#1a1a2e"
-      overflow="scroll"
-      scrollY={pageScroll}
-      scrollbarColor="#16c79a"
-      scrollbarTrackColor="#0f3460"
     >
       {/* Header */}
       <box border="rounded" borderColor="#e94560" padding={[0, 2]} width="100%">
@@ -65,285 +61,273 @@ const App = () => {
       </box>
 
       {/* Main content */}
-      <box flexDirection="row" gap={2} padding={[1, 0]} width="100%">
-        {/* Left column - Colors */}
-        <box
-          border="single"
-          borderColor="#0f3460"
-          padding={1}
-          width="30%"
-          flexDirection="column"
-        >
-          <text bold underline color="#16c79a">
-            Colors
-          </text>
-          <br />
-          <text color="#ff6b6b">● Red</text>
-          <text color="#feca57">● Yellow</text>
-          <text color="#48dbfb">● Cyan</text>
-          <text color="#ff9ff3">● Pink</text>
-          <text color="#54a0ff">● Blue</text>
-          <text color="#5f27cd">● Purple</text>
-          <text color="rgb(46, 213, 115)">● RGB Green</text>
-          <text color="hsl(280, 100%, 70%)">● HSL Purple</text>
-        </box>
-
-        {/* Middle column - Form elements */}
-        <box
-          border="single"
-          borderColor="#0f3460"
-          padding={1}
-          width="40%"
-          flexDirection="column"
-        >
-          <text bold underline color="#16c79a">
-            Form Elements
-          </text>
-          <br />
-
-          <text color="#888">Name:</text>
-          <input
-            id="name"
-            tabIndex={1}
-            placeholder="Enter your name..."
-            width={30}
-            bg="#2d2d44"
-          />
-          <br />
-
-          <text color="#888">Email:</text>
-          <input
-            id="email"
-            tabIndex={2}
-            placeholder="Enter email..."
-            type="email"
-            width={30}
-            bg="#2d2d44"
-          />
-          <br />
-
-          <text color="#888">Password:</text>
-          <input
-            id="password"
-            tabIndex={3}
-            placeholder="Enter password..."
-            type="password"
-            width={30}
-            bg="#2d2d44"
-          />
-          <br />
-
-          <box flexDirection="row" gap={2}>
-            <button
-              id="submit"
-              tabIndex={4}
-              bg="#e94560"
-              focusBg="#ff6b6b"
-              width={12}
-              onClick={() => {}}
-            >
-              Submit
-            </button>
-            <button
-              id="cancel"
-              tabIndex={5}
-              bg="#0f3460"
-              focusBg="#16537e"
-              width={12}
-            >
-              Cancel
-            </button>
-          </box>
-
-          <br />
-          <text bold underline color="#16c79a">
-            Key Pressed
-          </text>
-          <box
-            border="single"
-            borderColor="#0f3460"
-            padding={[0, 1]}
-            width="100%"
-          >
-            <text color="#feca57">{lastKey || "Press any key..."}</text>
-          </box>
-        </box>
-
-        {/* Right column - Text styles */}
-        <box
-          border="single"
-          borderColor="#0f3460"
-          padding={1}
-          width="30%"
-          flexDirection="column"
-        >
-          <text bold underline color="#16c79a">
-            Text Styles
-          </text>
-          <br />
-          <text bold>Bold text</text>
-          <text italic>Italic text</text>
-          <text underline>Underlined text</text>
-          <text strikethrough>Strikethrough</text>
-          <text dim>Dimmed text</text>
-          <text bold italic color="#feca57">
-            Bold + Italic
-          </text>
-          <text bold underline color="#48dbfb">
-            Bold + Underlined
-          </text>
-
-          <br />
-          <text bold underline color="#16c79a">
-            Scrollable Panel
-          </text>
-          <box
-            id="scroll-panel"
-            tabIndex={6}
-            focusable
-            border="single"
-            borderColor="#0f3460"
-            padding={[0, 1]}
-            height={8}
-            overflow="scroll"
-            scrollbarColor="#feca57"
-            scrollbarTrackColor="#2d2d44"
-          >
-            <text color="#888">Use ↑/↓ or PgUp/PgDn</text>
-            <text color="#888">to scroll this panel.</text>
-            <text>• Item 01</text>
-            <text>• Item 02</text>
-            <text>• Item 03</text>
-            <text>• Item 04</text>
-            <text>• Item 05</text>
-            <text>• Item 06</text>
-            <text>• Item 07</text>
-            <text>• Item 08</text>
-            <text>• Item 09</text>
-            <text>• Item 10</text>
-            <text>• Item 11</text>
-            <text>• Item 12</text>
-            <text>• Item 13</text>
-            <text>• Item 14</text>
-          </box>
-        </box>
-      </box>
-
-      {/* Table section */}
-      <box
-        border="single"
-        borderColor="#0f3460"
-        padding={1}
-        width="100%"
-        flexDirection="column"
-      >
-        <text bold underline color="#16c79a">
-          Sample Data
-        </text>
+      <box flexDirection="column" padding={[2, 0]} gap={1} width="100%">
+        <text color="#16c79a">Welcome to TUI Kit!</text>
+        <text color="#48dbfb">A terminal UI framework with JSX support.</text>
         <br />
-        <box flexDirection="row" gap={4}>
-          <text color="#888" width={15}>
-            Product
-          </text>
-          <text color="#888" width={10}>
-            Price
-          </text>
-          <text color="#888" width={10}>
-            Stock
-          </text>
-        </box>
-        <hr color="#333" width={45} />
-        <box flexDirection="row" gap={4}>
-          <text width={15}>Widget Pro</text>
-          <text color="#54a0ff" width={10}>
-            $29.99
-          </text>
-          <text color="#16c79a" width={10}>
-            ✓ In Stock
-          </text>
-        </box>
-        <box flexDirection="row" gap={4}>
-          <text width={15}>Gadget Plus</text>
-          <text color="#54a0ff" width={10}>
-            $49.99
-          </text>
-          <text color="#16c79a" width={10}>
-            ✓ In Stock
-          </text>
-        </box>
-        <box flexDirection="row" gap={4}>
-          <text width={15}>Super Thing</text>
-          <text color="#54a0ff" width={10}>
-            $99.99
-          </text>
-          <text color="#ff6b6b" width={10}>
-            ✗ Out
-          </text>
-        </box>
-      </box>
-
-      {/* Long content for page scrolling */}
-      <box
-        border="single"
-        borderColor="#0f3460"
-        padding={1}
-        width="100%"
-        flexDirection="column"
-      >
-        <text bold underline color="#16c79a">
-          Long Content
+        <text bold color="#feca57">
+          Features:
         </text>
-        <text dim color="#888">
-          Ctrl+↑/↓ scrolls the whole page
-        </text>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Multi-page routing with navigation</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Flex layout engine</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Form inputs (text, password, email, etc.)</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Scrollable containers & pages</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Mouse support (click, scroll, drag)</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">
+            • Full keyboard navigation (Tab, arrows, etc.)
+          </text>
+        </box>
         <br />
-        <text>• Scroll demo line 01</text>
-        <text>• Scroll demo line 02</text>
-        <text>• Scroll demo line 03</text>
-        <text>• Scroll demo line 04</text>
-        <text>• Scroll demo line 05</text>
-        <text>• Scroll demo line 06</text>
-        <text>• Scroll demo line 07</text>
-        <text>• Scroll demo line 08</text>
-        <text>• Scroll demo line 09</text>
-        <text>• Scroll demo line 10</text>
-        <text>• Scroll demo line 11</text>
-        <text>• Scroll demo line 12</text>
-        <text>• Scroll demo line 13</text>
-        <text>• Scroll demo line 14</text>
-        <text>• Scroll demo line 15</text>
-        <text>• Scroll demo line 16</text>
-        <text>• Scroll demo line 17</text>
-        <text>• Scroll demo line 18</text>
-        <text>• Scroll demo line 19</text>
-        <text>• Scroll demo line 20</text>
+        <text bold color="#feca57">
+          Navigate to:
+        </text>
+        <button
+          border="rounded"
+          borderColor="#16c79a"
+          padding={[0, 2]}
+          width={25}
+          textAlign="center"
+          onClick={() => navigate("/settings")}
+        >
+          <text color="#16c79a">→ Settings Page</text>
+        </button>
+        <button
+          border="rounded"
+          borderColor="#ff9ff3"
+          padding={[0, 2]}
+          width={25}
+          textAlign="center"
+          onClick={() => navigate("/about")}
+        >
+          <text color="#ff9ff3">→ About Page</text>
+        </button>
       </box>
 
       {/* Footer */}
-      <box
-        width="100%"
-        flexDirection="row"
-        justifyContent="center"
-        padding={[1, 0]}
-      >
-        <text dim color="#666">
-          Tab to navigate • Enter/Space to activate • Ctrl+↑/↓ page scroll •
-          q/Esc exit
+      <box width="100%" flexDirection="column" padding={[2, 0, 0, 0]}>
+        <text dim color="#666" textAlign="center">
+          Tab to navigate • Enter/Space to activate • q/Esc exit
         </text>
       </box>
     </box>
   );
 };
 
-// Run the demo (pass App function, not <App /> to preserve hooks context)
-const app = createApp(App);
+// Settings Page
+const SettingsPage = () => {
+  const { navigate } = useNavigation();
+  const [username, setUsername] = useState("alice");
+  const [theme, setTheme] = useState("dark");
+
+  return (
+    <box
+      width="100%"
+      height="100%"
+      flexDirection="column"
+      padding={1}
+      bg="#1a1a2e"
+    >
+      {/* Header */}
+      <box border="rounded" borderColor="#e94560" padding={[0, 2]} width="100%">
+        <box flexDirection="row" justifyContent="center" width="100%">
+          <text bold color="#e94560">
+            Settings
+          </text>
+        </box>
+      </box>
+
+      {/* Settings form */}
+      <box flexDirection="column" padding={[2, 0]} gap={1} width="100%">
+        <text bold color="#16c79a">
+          User Settings
+        </text>
+        <br />
+
+        <text color="#feca57">Username:</text>
+        <input
+          id="settings-username"
+          name="username"
+          value={username}
+          placeholder="Enter username"
+          border="single"
+          borderColor="#48dbfb"
+          padding={[0, 1]}
+          width={30}
+          onInput={setUsername}
+        />
+
+        <text color="#feca57">Theme:</text>
+        <box flexDirection="row" gap={2}>
+          <button
+            border={theme === "dark" ? "double" : "single"}
+            borderColor={theme === "dark" ? "#16c79a" : "#666"}
+            padding={[0, 2]}
+            onClick={() => setTheme("dark")}
+          >
+            <text color={theme === "dark" ? "#16c79a" : "#fff"}>Dark</text>
+          </button>
+          <button
+            border={theme === "light" ? "double" : "single"}
+            borderColor={theme === "light" ? "#feca57" : "#666"}
+            padding={[0, 2]}
+            onClick={() => setTheme("light")}
+          >
+            <text color={theme === "light" ? "#feca57" : "#fff"}>Light</text>
+          </button>
+        </box>
+
+        <br />
+        <text dim color="#666">
+          Current: {username} ({theme} theme)
+        </text>
+      </box>
+
+      {/* Navigation buttons */}
+      <box flexDirection="column" gap={1} padding={[2, 0, 0, 0]}>
+        <button
+          border="rounded"
+          borderColor="#54a0ff"
+          padding={[0, 2]}
+          width={20}
+          textAlign="center"
+          onClick={() => navigate("/")}
+        >
+          <text color="#54a0ff">← Back to Home</text>
+        </button>
+      </box>
+
+      {/* Footer */}
+      <box width="100%" flexDirection="column" padding={[2, 0, 0, 0]}>
+        <text dim color="#666" textAlign="center">
+          Tab to navigate • Enter/Space to activate • q/Esc exit
+        </text>
+      </box>
+    </box>
+  );
+};
+
+// About Page
+const AboutPage = () => {
+  const { navigate } = useNavigation();
+
+  return (
+    <box
+      width="100%"
+      height="100%"
+      flexDirection="column"
+      padding={1}
+      bg="#1a1a2e"
+    >
+      {/* Header */}
+      <box border="rounded" borderColor="#e94560" padding={[0, 2]} width="100%">
+        <box flexDirection="row" justifyContent="center" width="100%">
+          <text bold color="#e94560">
+            About
+          </text>
+        </box>
+      </box>
+
+      {/* About content */}
+      <box flexDirection="column" padding={[2, 0]} gap={1} width="100%">
+        <text bold color="#16c79a">
+          About TUI Kit
+        </text>
+        <br />
+
+        <text color="#fff">
+          TUI Kit is a modern terminal UI framework for building interactive
+          command-line applications with JSX.
+        </text>
+        <br />
+
+        <text bold color="#feca57">
+          Key Features:
+        </text>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• JSX-based component system</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Flexbox layout engine</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Full keyboard & mouse support</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Routing for multi-page apps</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Hooks (useState)</text>
+        </box>
+        <br />
+
+        <text bold color="#feca57">
+          Components:
+        </text>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Box, Text, Input, Button</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Textbox, Select, Checkbox</text>
+        </box>
+        <box padding={[0, 0, 0, 2]}>
+          <text color="#fff">• Form, Table, List</text>
+        </box>
+      </box>
+
+      {/* Navigation buttons */}
+      <box flexDirection="column" gap={1} padding={[2, 0, 0, 0]}>
+        <button
+          border="rounded"
+          borderColor="#ff9ff3"
+          padding={[0, 2]}
+          width={20}
+          textAlign="center"
+          onClick={() => navigate("/")}
+        >
+          <text color="#ff9ff3">← Back to Home</text>
+        </button>
+      </box>
+
+      {/* Footer */}
+      <box width="100%" flexDirection="column" padding={[2, 0, 0, 0]}>
+        <text dim color="#666" textAlign="center">
+          Tab to navigate • Enter/Space to activate • q/Esc exit
+        </text>
+      </box>
+    </box>
+  );
+};
+
+// Initialize app with routes
+const app = createApp(() => <box />, {
+  routes: {
+    routes: [
+      { path: "/", component: HomePage },
+      { path: "/settings", component: SettingsPage },
+      { path: "/about", component: AboutPage },
+    ],
+    initialPath: "/",
+  },
+});
+
 const input = app.getInput();
 input.on("keypress", (key: KeyEvent) => {
   const formatted = formatKey(key);
-  if (setLastKey) {
-    setLastKey(formatted);
-  }
+  const fn = setLastKey as ((value: string) => void) | null;
+  fn?.(formatted);
 });
+
 const exit = () => app.exit();
 
 // Handle process exit

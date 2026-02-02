@@ -3,6 +3,8 @@
  * Provides createElement, Fragment, and intrinsic element types
  */
 
+import { navigate as routerNavigate } from './router';
+
 /**
  * Style properties shared by all elements
  */
@@ -114,6 +116,13 @@ export interface TextboxProps extends StyleProps {
  */
 export interface ButtonProps extends StyleProps {
   type?: 'button' | 'submit';
+}
+
+/**
+ * Link props
+ */
+export interface LinkProps extends StyleProps {
+  to: string;  // Navigation target path
 }
 
 /**
@@ -276,6 +285,7 @@ declare global {
       input: InputProps;
       textbox: TextboxProps;
       button: ButtonProps & { children?: Child };
+      link: LinkProps & { children?: Child };
       select: SelectProps & { children?: Child };
       option: OptionProps;
       checkbox: CheckboxProps;
@@ -359,4 +369,13 @@ export function runWithHooks<T>(
   } finally {
     currentComponent = prev;
   }
+}
+
+/**
+ * useNavigation hook for programmatic navigation
+ */
+export function useNavigation() {
+  return {
+    navigate: (path: string) => routerNavigate(path),
+  };
 }
