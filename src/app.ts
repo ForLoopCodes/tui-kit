@@ -205,7 +205,7 @@ export function createApp(
         requestRender();
       } else if (key.name === 'return') {
         props.onSubmit?.(state.value);
-      } else if (key.char && !key.ctrl && !key.alt) {
+      } else if (key.char && !key.ctrl && !key.alt && key.name !== 'tab') {
         state.value = (state.value || '') + key.char;
         props.onInput?.(state.value);
         props.onChange?.(state.value);
