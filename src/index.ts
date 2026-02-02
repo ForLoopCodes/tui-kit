@@ -1,26 +1,73 @@
 /**
- *   ▄████████  ▄██████▄     ▄████████  ▄█        ▄██████▄   ▄██████▄     ▄███████▄ 
- *  ███    ███ ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- *  ███    █▀  ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- * ▄███▄▄▄     ███    ███  ▄███▄▄▄▄██▀ ███       ███    ███ ███    ███   ███    ███ 
- *▀▀███▀▀▀     ███    ███ ▀▀███▀▀▀▀▀   ███       ███    ███ ███    ███ ▀█████████▀  
- *  ███        ███    ███ ▀███████████ ███       ███    ███ ███    ███   ███        
- *  ███        ███    ███   ███    ███ ███▌    ▄ ███    ███ ███    ███   ███        
- *  ███         ▀██████▀    ███    ███ █████▄▄██  ▀██████▀   ▀██████▀   ▄████▀      
- *                          ███    ███ ▀                                            
- *
- * Primary library exports providing public api for terminal ui components
- * Includes types for rendering elements styling colors layout and interactions
+ * tui-kit - A lightweight, composable, JSX/TSX-based terminal UI framework
  */
 
-export { run, renderLines, createElement, Fragment } from "./tui"
-export type { VNode, RGBA, LayoutProps, BorderStyle, RunOptions } from "./tui"
-export { parseColor, toAnsiFg, toAnsiBg, reset, bold, dim, italic, underline } from "./colors"
-export { parseUnit, resolveUnit, getBorderChars } from "./layout"
-export { enableMouse, disableMouse, parseMouseEvent, processMouseEvent, registerRegion } from "./mouse"
-export { parseKey, registerGlobalKeybind, createKeyboardHandler } from "./input"
-export { 
-  registerElement, focusElement, focusNext, focusPrev, getFocusedElement,
-  createInputState, createButtonState, createSelectState, createCheckboxState,
-  handleInputKey, handleSelectKey, handleCheckboxKey, resetFocusOrder
-} from "./elements"
+// Core exports
+export { createElement, Fragment, VNode, Child, StyleProps } from './elements';
+export { useState, setRerenderCallback } from './elements';
+
+// App runtime
+export { run, createApp, renderLines, App, AppConfig } from './app';
+
+// Colors
+export {
+  parseColor,
+  fgColor,
+  bgColor,
+  blendColors,
+  rgbaToHex,
+  RGBA,
+  RESET,
+  STYLES,
+  TextStyle,
+  styleCode,
+} from './colors';
+
+// Layout
+export {
+  layout,
+  parseSize,
+  parseSpacing,
+  findById,
+  findFocusable,
+  hitTest,
+  LayoutNode,
+  Rect,
+  LayoutContext,
+} from './layout';
+
+// Rendering
+export {
+  ScreenBuffer,
+  renderLayout,
+  Cell,
+  Terminal,
+} from './render';
+
+// Input
+export {
+  parseKey,
+  parseMouse,
+  registerGlobalKeybind,
+  InputHandler,
+  FocusManager,
+  KeybindManager,
+  MouseManager,
+  KeyEvent,
+  MouseEvent,
+  Keybind,
+  MouseRegion,
+} from './input';
+
+// Element prop types
+export {
+  InputProps,
+  TextboxProps,
+  ButtonProps,
+  SelectProps,
+  OptionProps,
+  CheckboxProps,
+  FormProps,
+  TableProps,
+  HrProps,
+} from './elements';

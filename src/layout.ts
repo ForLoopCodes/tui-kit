@@ -1,223 +1,498 @@
 /**
- *   ▄████████  ▄██████▄     ▄████████  ▄█        ▄██████▄   ▄██████▄     ▄███████▄ 
- *  ███    ███ ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- *  ███    █▀  ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- * ▄███▄▄▄     ███    ███  ▄███▄▄▄▄██▀ ███       ███    ███ ███    ███   ███    ███ 
- *▀▀███▀▀▀     ███    ███ ▀▀███▀▀▀▀▀   ███       ███    ███ ███    ███ ▀█████████▀  
- *  ███        ███    ███ ▀███████████ ███       ███    ███ ███    ███   ███        
- *  ███        ███    ███   ███    ███ ███▌    ▄ ███    ███ ███    ███   ███        
- *  ███         ▀██████▀    ███    ███ █████▄▄██  ▀██████▀   ▀██████▀   ▄████▀      
- *                          ███    ███ ▀                                            
- *
- * Layout engine for tui kit providing unit parsing padding resolution and borders
- * Implements flexbox and grid positioning algorithms for terminal element rendering
+ * Layout engine with simplified Flexbox semantics
+ * Handles measurement, layout, and positioning
  */
 
-export type Display = "block" | "flex" | "grid" | "none"
-export type Overflow = "visible" | "hidden" | "scroll"
-export type TextAlign = "left" | "center" | "right"
-export type BorderStyle = "none" | "single" | "double" | "rounded" | "bold" | "dashed"
+import type { VNode, StyleProps } from './elements';
 
-export interface LayoutProps {
-  width?: string | number
-  height?: string | number
-  minWidth?: number
-  maxWidth?: number
-  minHeight?: number
-  maxHeight?: number
-  padding?: number | [number, number] | [number, number, number, number]
-  margin?: number | [number, number] | [number, number, number, number]
-  position?: "relative" | "absolute" | "fixed"
-  top?: number
-  left?: number
-  right?: number
-  bottom?: number
-  display?: Display
-  flexDirection?: "row" | "column" | "row-reverse" | "column-reverse"
-  flexWrap?: "nowrap" | "wrap" | "wrap-reverse"
-  justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "space-around" | "space-evenly"
-  alignItems?: "flex-start" | "flex-end" | "center" | "stretch" | "baseline"
-  gap?: number
-  gridTemplateColumns?: string
-  gridTemplateRows?: string
-  gridGap?: number
-  textAlign?: TextAlign
-  overflow?: Overflow
-  border?: BorderStyle
-  borderColor?: string
-  zIndex?: number
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export type Unit = { value: number; unit: "px" | "%" | "auto" | "ch" }
-
-export function parseUnit(value: string | number | undefined): Unit {
-  if (value === undefined || value === "auto") return { value: 0, unit: "auto" }
-  if (typeof value === "number") return { value, unit: "ch" }
-  if (value.endsWith("%")) return { value: parseFloat(value.slice(0, -1)), unit: "%" }
-  if (value.endsWith("ch")) return { value: parseFloat(value.slice(0, -2)), unit: "ch" }
-  if (value.endsWith("px")) return { value: parseFloat(value.slice(0, -2)), unit: "ch" }
-  return { value: parseFloat(value) || 0, unit: "ch" }
+export interface LayoutNode {
+  node: VNode;
+  rect: Rect;
+  children: LayoutNode[];
+  scrollX: number;
+  scrollY: number;
+  contentWidth: number;
+  contentHeight: number;
 }
 
-export function resolveUnit(unit: Unit, total: number): number {
-  if (unit.unit === "auto") return 0
-  if (unit.unit === "%") return Math.floor((unit.value / 100) * total)
-  return Math.floor(unit.value)
+export interface LayoutContext {
+  parentWidth: number;
+  parentHeight: number;
+  x: number;
+  y: number;
 }
 
-export function parsePadding(padding: LayoutProps["padding"]): [number, number, number, number] {
-  if (padding === undefined) return [0, 0, 0, 0]
-  if (typeof padding === "number") return [padding, padding, padding, padding]
-  if (Array.isArray(padding)) {
-    if (padding.length === 2) return [padding[0], padding[1], padding[0], padding[1]]
-    if (padding.length === 4) return padding as [number, number, number, number]
+/**
+ * Parse a size value (number, percentage, or 'auto')
+ */
+export function parseSize(
+  value: number | string | undefined,
+  parentSize: number,
+  defaultValue: number = 0
+): number {
+  if (value === undefined || value === 'auto') {
+    return defaultValue;
   }
-  return [0, 0, 0, 0]
-}
 
-export function getBorderChars(style: BorderStyle): { tl: string; tr: string; bl: string; br: string; h: string; v: string } {
-  const table = {
-    none: { tl: " ", tr: " ", bl: " ", br: " ", h: " ", v: " " },
-    single: { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" },
-    double: { tl: "╔", tr: "╗", bl: "╚", br: "╝", h: "═", v: "║" },
-    rounded: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
-    bold: { tl: "┏", tr: "┓", bl: "┗", br: "┛", h: "━", v: "┃" },
-    dashed: { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "╌", v: "┆" }
+  if (typeof value === 'number') {
+    return Math.floor(value);
   }
-  return table[style] || table.single
+
+  if (typeof value === 'string') {
+    if (value.endsWith('%')) {
+      const percent = parseFloat(value) / 100;
+      return Math.floor(parentSize * percent);
+    }
+    if (value.endsWith('blocks')) {
+      return Math.floor(parseFloat(value));
+    }
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      return Math.floor(num);
+    }
+  }
+
+  return defaultValue;
 }
 
-export interface ComputedLayout {
-  x: number
-  y: number
-  width: number
-  height: number
-  innerX: number
-  innerY: number
-  innerWidth: number
-  innerHeight: number
-  scrollX: number
-  scrollY: number
-  contentWidth: number
-  contentHeight: number
+/**
+ * Parse padding/margin values
+ * Accepts: number, [vertical, horizontal], [top, right, bottom, left]
+ */
+export function parseSpacing(
+  value: number | number[] | undefined
+): { top: number; right: number; bottom: number; left: number } {
+  if (value === undefined) {
+    return { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+
+  if (typeof value === 'number') {
+    return { top: value, right: value, bottom: value, left: value };
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 2) {
+      return { top: value[0], right: value[1], bottom: value[0], left: value[1] };
+    }
+    if (value.length === 4) {
+      return { top: value[0], right: value[1], bottom: value[2], left: value[3] };
+    }
+  }
+
+  return { top: 0, right: 0, bottom: 0, left: 0 };
 }
 
-export function calculateLayout(props: LayoutProps, totalW: number, totalH: number, contentW: number, contentH: number): ComputedLayout {
-  const w = resolveUnit(parseUnit(props.width), totalW) || contentW
-  const h = resolveUnit(parseUnit(props.height), totalH) || contentH
-  const [pt, pr, pb, pl] = parsePadding(props.padding)
-  const borderSize = props.border && props.border !== "none" ? 1 : 0
+/**
+ * Get border thickness
+ */
+export function getBorderThickness(border: string | undefined): number {
+  if (!border || border === 'none') return 0;
+  return 1;
+}
+
+/**
+ * Measure the intrinsic size of text content
+ */
+export function measureText(text: string): { width: number; height: number } {
+  const lines = text.split('\n');
+  const width = Math.max(...lines.map((l) => textWidth(l)));
+  const height = lines.length;
+  return { width, height };
+}
+
+/**
+ * Calculate display width using code points (handles surrogate pairs)
+ */
+export function textWidth(text: string): number {
+  return Array.from(stripAnsi(text)).length;
+}
+
+/**
+ * Strip ANSI escape codes from a string
+ */
+export function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * Get text content from a VNode tree
+ */
+export function getTextContent(node: VNode | string | number): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (!node) return '';
+
+  if (Array.isArray(node.children)) {
+    return node.children.map(getTextContent).join('');
+  }
+
+  return '';
+}
+
+/**
+ * Measure a single node's content size
+ */
+export function measureNode(
+  node: VNode,
+  ctx: LayoutContext
+): { width: number; height: number } {
+  const props = node.props as StyleProps;
+  const padding = parseSpacing(props.padding);
+  const borderSize = getBorderThickness(props.border);
+
+  // Calculate available inner space
+  const paddingH = padding.left + padding.right + borderSize * 2;
+  const paddingV = padding.top + padding.bottom + borderSize * 2;
+
+  // If explicit size is set, use it
+  let width = parseSize(props.width, ctx.parentWidth, 0);
+  let height = parseSize(props.height, ctx.parentHeight, 0);
+
+  // Measure children for intrinsic sizing
+  if (width === 0 || height === 0) {
+    const children = normalizeChildren(node.children);
+    const flexDirection = props.flexDirection || 'column';
+    const gap = props.gap || 0;
+
+    let contentWidth = 0;
+    let contentHeight = 0;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const childSize = measureChild(child, {
+        parentWidth: ctx.parentWidth - paddingH,
+        parentHeight: ctx.parentHeight - paddingV,
+        x: 0,
+        y: 0,
+      });
+
+      if (flexDirection === 'row' || flexDirection === 'row-reverse') {
+        contentWidth += childSize.width + (i > 0 ? gap : 0);
+        contentHeight = Math.max(contentHeight, childSize.height);
+      } else {
+        contentWidth = Math.max(contentWidth, childSize.width);
+        contentHeight += childSize.height + (i > 0 ? gap : 0);
+      }
+    }
+
+    if (width === 0) width = contentWidth + paddingH;
+    if (height === 0) height = contentHeight + paddingV;
+  }
+
+  // Form elements need minimum height if not explicitly set
+  const type = node.type;
+  const isFormElement = type === 'input' || type === 'textbox' || type === 'button' || type === 'checkbox' || type === 'select';
+  const explicitHeight = parseSize(props.height, ctx.parentHeight, 0) > 0;
+  if (isFormElement && !explicitHeight && height === 0) {
+    height = 1 + paddingV; // 1 line for text + padding
+  }
+
+  // Apply min/max constraints
+  if (props.minWidth !== undefined) {
+    width = Math.max(width, parseSize(props.minWidth, ctx.parentWidth, 0));
+  }
+  if (props.maxWidth !== undefined) {
+    width = Math.min(width, parseSize(props.maxWidth, ctx.parentWidth, Infinity));
+  }
+  if (props.minHeight !== undefined) {
+    height = Math.max(height, parseSize(props.minHeight, ctx.parentHeight, 0));
+  }
+  if (props.maxHeight !== undefined) {
+    height = Math.min(height, parseSize(props.maxHeight, ctx.parentHeight, Infinity));
+  }
+
+  return { width, height };
+}
+
+/**
+ * Measure a child (either VNode or text)
+ */
+function measureChild(
+  child: VNode | string | number,
+  ctx: LayoutContext
+): { width: number; height: number } {
+  if (typeof child === 'string') {
+    return measureText(child);
+  }
+  if (typeof child === 'number') {
+    return measureText(String(child));
+  }
+  return measureNode(child, ctx);
+}
+
+/**
+ * Normalize children to array
+ */
+export function normalizeChildren(
+  children: VNode['children']
+): (VNode | string | number)[] {
+  if (!children) return [];
+  if (Array.isArray(children)) return children.flat(Infinity).filter((c) => c != null);
+  return [children];
+}
+
+/**
+ * Perform layout calculation for the entire tree
+ */
+export function layout(
+  node: VNode,
+  screenWidth: number,
+  screenHeight: number
+): LayoutNode {
+  const ctx: LayoutContext = {
+    parentWidth: screenWidth,
+    parentHeight: screenHeight,
+    x: 0,
+    y: 0,
+  };
+
+  return layoutNode(node, ctx);
+}
+
+/**
+ * Layout a single node and its children
+ */
+function layoutNode(node: VNode, ctx: LayoutContext): LayoutNode {
+  const props = node.props as StyleProps;
+  const padding = parseSpacing(props.padding);
+  const margin = parseSpacing(props.margin);
+  const borderSize = getBorderThickness(props.border);
+
+  // Calculate size
+  const size = measureNode(node, ctx);
+  let { width, height } = size;
+
+  // Handle 100% width/height
+  if (props.width === '100%') width = ctx.parentWidth;
+  if (props.height === '100%') height = ctx.parentHeight;
+
+  // Calculate position
+  let x = ctx.x + margin.left;
+  let y = ctx.y + margin.top;
+
+  // Handle absolute/fixed positioning
+  if (props.position === 'absolute' || props.position === 'fixed') {
+    if (props.left !== undefined) x = parseSize(props.left, ctx.parentWidth, 0);
+    if (props.top !== undefined) y = parseSize(props.top, ctx.parentHeight, 0);
+    if (props.right !== undefined) {
+      x = ctx.parentWidth - width - parseSize(props.right, ctx.parentWidth, 0);
+    }
+    if (props.bottom !== undefined) {
+      y = ctx.parentHeight - height - parseSize(props.bottom, ctx.parentHeight, 0);
+    }
+  }
+
+  // Layout children
+  const children = normalizeChildren(node.children);
+  const flexDirection = props.flexDirection || 'column';
+  const justifyContent = props.justifyContent || 'flex-start';
+  const alignItems = props.alignItems || 'flex-start';
+  const gap = props.gap || 0;
+
+  // Inner content area
+  const innerX = x + padding.left + borderSize;
+  const innerY = y + padding.top + borderSize;
+  const innerWidth = width - padding.left - padding.right - borderSize * 2;
+  const innerHeight = height - padding.top - padding.bottom - borderSize * 2;
+
+  // Measure all children first
+  const childSizes = children.map((child) =>
+    measureChild(child, {
+      parentWidth: innerWidth,
+      parentHeight: innerHeight,
+      x: 0,
+      y: 0,
+    })
+  );
+
+  // Calculate total size of children
+  const isRow = flexDirection === 'row' || flexDirection === 'row-reverse';
+  const totalMainSize = childSizes.reduce(
+    (sum, s, i) => sum + (isRow ? s.width : s.height) + (i > 0 ? gap : 0),
+    0
+  );
+
+  // Calculate starting position based on justifyContent
+  let mainPos = 0;
+  let mainGap = gap;
+  const availableMain = isRow ? innerWidth : innerHeight;
+  const freeSpace = availableMain - totalMainSize;
+
+  switch (justifyContent) {
+    case 'flex-end':
+      mainPos = freeSpace;
+      break;
+    case 'center':
+      mainPos = freeSpace / 2;
+      break;
+    case 'space-between':
+      mainGap = children.length > 1 ? freeSpace / (children.length - 1) + gap : gap;
+      break;
+    case 'space-around':
+      mainGap = freeSpace / children.length;
+      mainPos = mainGap / 2;
+      break;
+    case 'space-evenly':
+      mainGap = freeSpace / (children.length + 1);
+      mainPos = mainGap;
+      break;
+  }
+
+  // Layout each child
+  const layoutChildren: LayoutNode[] = [];
+  let contentWidth = 0;
+  let contentHeight = 0;
+
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    const childSize = childSizes[i];
+
+    // Calculate cross-axis position based on alignItems
+    let crossPos = 0;
+    const crossSize = isRow ? childSize.height : childSize.width;
+    const availableCross = isRow ? innerHeight : innerWidth;
+
+    switch (alignItems) {
+      case 'flex-end':
+        crossPos = availableCross - crossSize;
+        break;
+      case 'center':
+        crossPos = (availableCross - crossSize) / 2;
+        break;
+      case 'stretch':
+        // For stretch, we'd modify the child size
+        break;
+    }
+
+    const childX = isRow ? innerX + mainPos : innerX + crossPos;
+    const childY = isRow ? innerY + crossPos : innerY + mainPos;
+
+    if (typeof child === 'string' || typeof child === 'number') {
+      // Text node - create a synthetic layout node
+      layoutChildren.push({
+        node: { type: 'text', props: {}, children: String(child) } as VNode,
+        rect: {
+          x: childX,
+          y: childY,
+          width: childSize.width,
+          height: childSize.height,
+        },
+        children: [],
+        scrollX: 0,
+        scrollY: 0,
+        contentWidth: childSize.width,
+        contentHeight: childSize.height,
+      });
+    } else {
+      // Recurse for VNode children
+      const childLayout = layoutNode(child, {
+        parentWidth: innerWidth,
+        parentHeight: innerHeight,
+        x: childX,
+        y: childY,
+      });
+      layoutChildren.push(childLayout);
+    }
+
+    // Track content size
+    contentWidth = Math.max(contentWidth, childX - x + childSize.width);
+    contentHeight = Math.max(contentHeight, childY - y + childSize.height);
+
+    // Advance position
+    mainPos += (isRow ? childSize.width : childSize.height) + mainGap;
+  }
+
+  // Handle reverse directions
+  if (flexDirection === 'row-reverse' || flexDirection === 'column-reverse') {
+    layoutChildren.reverse();
+  }
 
   return {
-    x: props.left || 0,
-    y: props.top || 0,
-    width: w,
-    height: h,
-    innerX: borderSize + pl,
-    innerY: borderSize + pt,
-    innerWidth: Math.max(0, w - borderSize * 2 - pl - pr),
-    innerHeight: Math.max(0, h - borderSize * 2 - pt - pb),
+    node,
+    rect: { x, y, width, height },
+    children: layoutChildren,
     scrollX: 0,
     scrollY: 0,
-    contentWidth: contentW,
-    contentHeight: contentH
-  }
+    contentWidth,
+    contentHeight,
+  };
 }
 
-export function layoutFlexChildren(children: ComputedLayout[], containerW: number, containerH: number, props: LayoutProps, childProps?: Record<string, any>[]): void {
-  const dir = props.flexDirection || "row"
-  const justify = props.justifyContent || "flex-start"
-  const align = props.alignItems || "flex-start"
-  const gap = props.gap || 0
-  const isRow = dir === "row" || dir === "row-reverse"
+/**
+ * Find a layout node by element ID
+ */
+export function findById(root: LayoutNode, id: string): LayoutNode | null {
+  const props = root.node.props as StyleProps;
+  if (props.id === id) return root;
 
-  let totalFixed = 0
-  let totalFlex = 0
-  children.forEach((c, i) => {
-    const flex = childProps?.[i]?.flex || 0
-    if (flex > 0) {
-      totalFlex += flex
-    } else {
-      totalFixed += (isRow ? c.width : c.height)
-    }
-  })
-  totalFixed += (children.length - 1) * gap
-
-  const mainSize = isRow ? containerW : containerH
-  const freeSpace = Math.max(0, mainSize - totalFixed)
-  const flexUnit = totalFlex > 0 ? freeSpace / totalFlex : 0
-
-  children.forEach((c, i) => {
-    const flex = childProps?.[i]?.flex || 0
-    if (flex > 0) {
-      if (isRow) c.width = Math.floor(flexUnit * flex)
-      else c.height = Math.floor(flexUnit * flex)
-    }
-  })
-
-  let totalMain = 0
-  children.forEach((c, i) => {
-    totalMain += (isRow ? c.width : c.height) + (i > 0 ? gap : 0)
-  })
-
-  let mainOffset = 0
-  let spacer = 0
-  if (justify === "center") mainOffset = Math.max(0, (mainSize - totalMain) / 2)
-  else if (justify === "flex-end") mainOffset = Math.max(0, mainSize - totalMain)
-  else if (justify === "space-between" && children.length > 1) {
-    spacer = Math.max(0, (mainSize - totalMain + (children.length - 1) * gap) / (children.length - 1))
-  } else if (justify === "space-around" && children.length > 0) {
-    spacer = Math.max(0, (mainSize - totalMain + (children.length - 1) * gap) / children.length)
-    mainOffset = spacer / 2
-  } else if (justify === "space-evenly" && children.length > 0) {
-    spacer = Math.max(0, (mainSize - totalMain + (children.length - 1) * gap) / (children.length + 1))
-    mainOffset = spacer
+  for (const child of root.children) {
+    const found = findById(child, id);
+    if (found) return found;
   }
 
-  const crossSize = isRow ? containerH : containerW
-
-  children.forEach((c, i) => {
-    if (isRow) {
-      c.x = Math.floor(mainOffset)
-      if (align === "center") c.y = Math.floor((crossSize - c.height) / 2)
-      else if (align === "flex-end") c.y = crossSize - c.height
-      else if (align === "stretch") { c.y = 0; c.height = crossSize }
-      else c.y = 0
-      mainOffset += c.width + (spacer || gap)
-    } else {
-      c.y = Math.floor(mainOffset)
-      if (align === "center") c.x = Math.floor((crossSize - c.width) / 2)
-      else if (align === "flex-end") c.x = crossSize - c.width
-      else if (align === "stretch") { c.x = 0; c.width = crossSize }
-      else c.x = 0
-      mainOffset += c.height + (spacer || gap)
-    }
-  })
+  return null;
 }
 
-export function layoutGridChildren(children: ComputedLayout[], containerW: number, containerH: number, props: LayoutProps): void {
-  const cols = props.gridTemplateColumns ? props.gridTemplateColumns.split(/\s+/).length : 1
-  const gap = props.gridGap || props.gap || 0
-  const colW = Math.floor((containerW - (cols - 1) * gap) / cols)
+/**
+ * Find all focusable elements in layout order
+ */
+export function findFocusable(root: LayoutNode): LayoutNode[] {
+  const focusable: LayoutNode[] = [];
 
-  const numRows = Math.ceil(children.length / cols)
-  const rowHeights: number[] = []
-  for (let r = 0; r < numRows; r++) {
-    let maxH = 1
-    for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c
-      if (idx < children.length) maxH = Math.max(maxH, children[idx].height || 1)
+  function traverse(node: LayoutNode) {
+    const props = node.node.props as StyleProps;
+    const nodeType = node.node.type as string;
+
+    // Check if focusable
+    if (
+      props.focusable ||
+      props.tabIndex !== undefined ||
+      ['input', 'textbox', 'button', 'select', 'checkbox'].includes(nodeType)
+    ) {
+      focusable.push(node);
     }
-    rowHeights.push(maxH)
+
+    // Traverse children
+    for (const child of node.children) {
+      traverse(child);
+    }
   }
 
-  let yOffset = 0
-  children.forEach((c, i) => {
-    const row = Math.floor(i / cols)
-    const col = i % cols
-    if (col === 0 && row > 0) yOffset += rowHeights[row - 1] + gap
-    c.x = col * (colW + gap)
-    c.y = yOffset
-    c.width = colW
-  })
+  traverse(root);
+
+  // Sort by tabIndex
+  focusable.sort((a, b) => {
+    const aIdx = (a.node.props as StyleProps).tabIndex ?? 0;
+    const bIdx = (b.node.props as StyleProps).tabIndex ?? 0;
+    return aIdx - bIdx;
+  });
+
+  return focusable;
+}
+
+/**
+ * Hit test - find the deepest node at a given position
+ */
+export function hitTest(root: LayoutNode, x: number, y: number): LayoutNode | null {
+  // Check if point is within node bounds
+  const { rect } = root;
+  if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) {
+    return null;
+  }
+
+  // Check children (in reverse order for z-ordering)
+  for (let i = root.children.length - 1; i >= 0; i--) {
+    const hit = hitTest(root.children[i], x, y);
+    if (hit) return hit;
+  }
+
+  return root;
 }

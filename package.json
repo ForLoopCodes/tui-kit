@@ -1,21 +1,32 @@
 {
   "name": "tui-kit",
   "version": "0.1.0",
-  "description": "Minimal terminal UI toolkit (JSX-style text renderer)",
+  "description": "A lightweight, composable, JSX/TSX-based terminal UI framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "demo": "ts-node --project tsconfig.json --files test/demo.tsx",
-    "prepare": "npm run build"
+    "build": "tsc",
+    "demo": "npx tsx test/demo.tsx",
+    "shop": "npx tsx test/shop.tsx",
+    "dev": "tsc --watch"
   },
-  "files": [
-    "dist"
+  "keywords": [
+    "terminal",
+    "tui",
+    "cli",
+    "jsx",
+    "tsx",
+    "ui",
+    "framework"
   ],
+  "author": "",
+  "license": "MIT",
   "devDependencies": {
-    "@types/node": "^25.1.0",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.4.0"
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

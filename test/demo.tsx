@@ -1,189 +1,271 @@
+/** @jsxRuntime classic */
+/** @jsx createElement */
+/** @jsxFrag Fragment */
 /**
- *   ▄████████  ▄██████▄     ▄████████  ▄█        ▄██████▄   ▄██████▄     ▄███████▄
- *  ███    ███ ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███
- *  ███    █▀  ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███
- * ▄███▄▄▄     ███    ███  ▄███▄▄▄▄██▀ ███       ███    ███ ███    ███   ███    ███
- *▀▀███▀▀▀     ███    ███ ▀▀███▀▀▀▀▀   ███       ███    ███ ███    ███ ▀█████████▀
- *  ███        ███    ███ ▀███████████ ███       ███    ███ ███    ███   ███
- *  ███        ███    ███   ███    ███ ███▌    ▄ ███    ███ ███    ███   ███
- *  ███         ▀██████▀    ███    ███ █████▄▄██  ▀██████▀   ▀██████▀   ▄████▀
- *                          ███    ███ ▀
- *
- * Interactive terminal shopping website demo using tui-kit
- * Showcases grid layout, flexbox, focus navigation, and interactive elements
+ * TUI Kit Demo - Showcases colors, buttons, inputs, and layout
  */
 
-import { run, createElement, Fragment } from "../src";
+import { createApp, createElement, Fragment, useState, KeyEvent } from "../src";
+// Provide compatibility for JSX runtime (some runners emit React.createElement)
+(globalThis as any).React = { createElement, Fragment };
 
-// Product data
-const products = [
-  { id: 1, name: "Pro Keyboard", price: 149.99, color: "#ff6b6b" },
-  { id: 2, name: "Ultra Mouse", price: 89.99, color: "#4ecdc4" },
-  { id: 3, name: "4K Monitor", price: 399.99, color: "#45b7d1" },
-  { id: 4, name: "Headphones", price: 199.99, color: "#96ceb4" },
-  { id: 5, name: "Webcam Kit", price: 129.99, color: "#ffeaa7" },
-  { id: 6, name: "Desk Mat", price: 29.99, color: "#dfe6e9" },
-];
+const formatKey = (key: KeyEvent): string => {
+  const parts: string[] = [];
+  if (key.ctrl) parts.push("Ctrl");
+  if (key.alt) parts.push("Alt");
+  if (key.shift) parts.push("Shift");
 
-// Cart state
-type CartItem = { id: number; name: string; price: number; qty: number };
-let cart: CartItem[] = [];
-let redraw: () => void = () => {};
-
-function addToCart(product: typeof products[0]) {
-  const existing = cart.find((i) => i.id === product.id);
-  if (existing) {
-    existing.qty++;
-  } else {
-    cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
+  let name = key.name || key.char || "";
+  if (name === "space") name = "Space";
+  if (name === "escape") name = "Esc";
+  if (name === "return") name = "Enter";
+  if (name) {
+    parts.push(
+      name.length === 1
+        ? name.toUpperCase()
+        : name[0].toUpperCase() + name.slice(1),
+    );
   }
-  redraw();
-}
 
-function getCartTotal(): string {
-  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-  return `$${total.toFixed(2)}`;
-}
+  return parts.length > 0 ? parts.join("+") : "Unknown";
+};
 
-function getCartCount(): number {
-  return cart.reduce((sum, item) => sum + item.qty, 0);
-}
+let setLastKey: ((value: string) => void) | null = null;
 
-// Components
-const ProductCard = ({ product }: { product: typeof products[0] }) => (
-  <box
-    id={`card_${product.id}`}
-    border="single"
-    borderColor={product.color}
-    padding={1}
-    width={26}
-  >
-    <box color={product.color} bold>
-      {product.name}
-    </box>
-    <box color="#888">${product.price.toFixed(2)}</box>
-    <button
-      id={`add_${product.id}`}
-      bg={product.color}
-      color="#000"
-      hoverBg="#fff"
-      hoverColor="#000"
-      focusBg="#fff"
-      focusColor="#000"
-      onClick={() => addToCart(product)}
+// Demo App Component
+const App = () => {
+  const [lastKey, setLastKeyState] = useState("");
+  setLastKey = setLastKeyState;
+
+  return (
+    <box
+      width="100%"
+      height="100%"
+      flexDirection="column"
+      padding={1}
+      bg="#1a1a2e"
     >
-      Add to Cart
-    </button>
-  </box>
-);
-
-const Header = () => (
-  <box flexDirection="row" justifyContent="space-between" padding={[0, 1]}>
-    <box flexDirection="row" gap={1}>
-      <box color="#e94560" bold>
-        Terminal
-      </box>
-      <box color="#fff" bold underline>
-        Shop
-      </box>
-    </box>
-    <box color="#666">Tab: Navigate | Enter: Select | Q: Quit</box>
-  </box>
-);
-
-const ProductGrid = () => (
-  <box display="grid" gridTemplateColumns="1fr 1fr 1fr" gap={1}>
-    {products.map((p) => (
-      <ProductCard product={p} />
-    ))}
-  </box>
-);
-
-const CartItem = ({ item }: { item: CartItem }) => (
-  <box flexDirection="row" justifyContent="space-between">
-    <box color="#dfe6e9">
-      {item.qty}x {item.name.slice(0, 10)}
-    </box>
-    <box color="#888">${(item.price * item.qty).toFixed(2)}</box>
-  </box>
-);
-
-const CartPanel = () => (
-  <box width={28} border="double" borderColor="#ffa502" padding={1}>
-    <box color="#ffa502" bold>
-      🛒 Cart ({getCartCount()})
-    </box>
-    <hr color="#444" />
-    {cart.length === 0 ? (
-      <box color="#666" italic>
-        Empty cart
-      </box>
-    ) : (
-      <box>
-        {cart.map((item) => (
-          <CartItem item={item} />
-        ))}
-      </box>
-    )}
-    <hr color="#444" />
-    <box flexDirection="row" justifyContent="space-between">
-      <box color="#fff" bold>
-        Total:
-      </box>
-      <box color="#2ed573" bold>
-        {getCartTotal()}
-      </box>
-    </box>
-    <box padding={[1, 0, 0, 0]}>
-      <button
-        id="checkout"
-        bg="#2ed573"
-        color="#000"
-        hoverBg="#7bed9f"
-        focusBg="#fff"
-        focusColor="#2ed573"
-        onClick={() => {
-          if (cart.length > 0) {
-            cart = [];
-            redraw();
-          }
-        }}
-      >
-        Checkout
-      </button>
-    </box>
-  </box>
-);
-
-const App = () => (
-  <box bg="#0f0f1a" color="#eee" padding={1}>
-    <Header />
-    <hr color="#333" />
-    <box flexDirection="row" gap={2} padding={[1, 0]}>
-      <box flex={1}>
-        <box color="#dfe6e9" bold padding={[0, 0, 1, 0]}>
-          Featured Products
+      {/* Header */}
+      <box border="rounded" borderColor="#e94560" padding={[0, 2]} width="100%">
+        <box flexDirection="row" justifyContent="center" width="100%">
+          <text bold color="#e94560">
+            TUI Kit
+          </text>
         </box>
-        <ProductGrid />
       </box>
-      <CartPanel />
-    </box>
-    <box bg="#1a1a2e" padding={[1, 1]}>
-      <box color="#636e72">
-        Press Tab to navigate • Enter/Space to select • Q to quit
-      </box>
-    </box>
-  </box>
-);
 
-// Run the app
-const exit = run(<App />, {
-  onBeforeRender: (_tree: any, draw: () => void) => {
-    redraw = draw;
-  },
+      {/* Main content */}
+      <box flexDirection="row" gap={2} padding={[1, 0]} width="100%">
+        {/* Left column - Colors */}
+        <box
+          border="single"
+          borderColor="#0f3460"
+          padding={1}
+          width="30%"
+          flexDirection="column"
+        >
+          <text bold underline color="#16c79a">
+            Colors
+          </text>
+          <br />
+          <text color="#ff6b6b">● Red</text>
+          <text color="#feca57">● Yellow</text>
+          <text color="#48dbfb">● Cyan</text>
+          <text color="#ff9ff3">● Pink</text>
+          <text color="#54a0ff">● Blue</text>
+          <text color="#5f27cd">● Purple</text>
+          <text color="rgb(46, 213, 115)">● RGB Green</text>
+          <text color="hsl(280, 100%, 70%)">● HSL Purple</text>
+        </box>
+
+        {/* Middle column - Form elements */}
+        <box
+          border="single"
+          borderColor="#0f3460"
+          padding={1}
+          width="40%"
+          flexDirection="column"
+        >
+          <text bold underline color="#16c79a">
+            Form Elements
+          </text>
+          <br />
+
+          <text color="#888">Name:</text>
+          <input
+            id="name"
+            tabIndex={1}
+            placeholder="Enter your name..."
+            width={30}
+            bg="#2d2d44"
+          />
+          <br />
+
+          <text color="#888">Email:</text>
+          <input
+            id="email"
+            tabIndex={2}
+            placeholder="Enter email..."
+            type="email"
+            width={30}
+            bg="#2d2d44"
+          />
+          <br />
+
+          <text color="#888">Password:</text>
+          <input
+            id="password"
+            tabIndex={3}
+            placeholder="Enter password..."
+            type="password"
+            width={30}
+            bg="#2d2d44"
+          />
+          <br />
+
+          <box flexDirection="row" gap={2}>
+            <button
+              id="submit"
+              tabIndex={4}
+              bg="#e94560"
+              focusBg="#ff6b6b"
+              width={12}
+              onClick={() => {}}
+            >
+              Submit
+            </button>
+            <button
+              id="cancel"
+              tabIndex={5}
+              bg="#0f3460"
+              focusBg="#16537e"
+              width={12}
+            >
+              Cancel
+            </button>
+          </box>
+
+          <br />
+          <text bold underline color="#16c79a">
+            Key Pressed
+          </text>
+          <box
+            border="single"
+            borderColor="#0f3460"
+            padding={[0, 1]}
+            width="100%"
+          >
+            <text color="#feca57">{lastKey || "Press any key..."}</text>
+          </box>
+        </box>
+
+        {/* Right column - Text styles */}
+        <box
+          border="single"
+          borderColor="#0f3460"
+          padding={1}
+          width="30%"
+          flexDirection="column"
+        >
+          <text bold underline color="#16c79a">
+            Text Styles
+          </text>
+          <br />
+          <text bold>Bold text</text>
+          <text italic>Italic text</text>
+          <text underline>Underlined text</text>
+          <text strikethrough>Strikethrough</text>
+          <text dim>Dimmed text</text>
+          <text bold italic color="#feca57">
+            Bold + Italic
+          </text>
+          <text bold underline color="#48dbfb">
+            Bold + Underlined
+          </text>
+        </box>
+      </box>
+
+      {/* Table section */}
+      <box
+        border="single"
+        borderColor="#0f3460"
+        padding={1}
+        width="100%"
+        flexDirection="column"
+      >
+        <text bold underline color="#16c79a">
+          Sample Data
+        </text>
+        <br />
+        <box flexDirection="row" gap={4}>
+          <text color="#888" width={15}>
+            Product
+          </text>
+          <text color="#888" width={10}>
+            Price
+          </text>
+          <text color="#888" width={10}>
+            Stock
+          </text>
+        </box>
+        <hr color="#333" width={45} />
+        <box flexDirection="row" gap={4}>
+          <text width={15}>Widget Pro</text>
+          <text color="#54a0ff" width={10}>
+            $29.99
+          </text>
+          <text color="#16c79a" width={10}>
+            ✓ In Stock
+          </text>
+        </box>
+        <box flexDirection="row" gap={4}>
+          <text width={15}>Gadget Plus</text>
+          <text color="#54a0ff" width={10}>
+            $49.99
+          </text>
+          <text color="#16c79a" width={10}>
+            ✓ In Stock
+          </text>
+        </box>
+        <box flexDirection="row" gap={4}>
+          <text width={15}>Super Thing</text>
+          <text color="#54a0ff" width={10}>
+            $99.99
+          </text>
+          <text color="#ff6b6b" width={10}>
+            ✗ Out
+          </text>
+        </box>
+      </box>
+
+      {/* Footer */}
+      <box
+        width="100%"
+        flexDirection="row"
+        justifyContent="center"
+        padding={[1, 0]}
+      >
+        <text dim color="#666">
+          Press Tab to navigate • Enter/Space to activate • q or Esc to exit
+        </text>
+      </box>
+    </box>
+  );
+};
+
+// Run the demo (pass App function, not <App /> to preserve hooks context)
+const app = createApp(App);
+const input = app.getInput();
+input.on("keypress", (key: KeyEvent) => {
+  const formatted = formatKey(key);
+  if (setLastKey) {
+    setLastKey(formatted);
+  }
 });
+const exit = () => app.exit();
 
+// Handle process exit
 process.on("SIGINT", () => {
   exit();
-  process.exit();
+  process.exit(0);
 });

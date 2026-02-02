@@ -1,248 +1,639 @@
 /**
- *   ▄████████  ▄██████▄     ▄████████  ▄█        ▄██████▄   ▄██████▄     ▄███████▄ 
- *  ███    ███ ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- *  ███    █▀  ███    ███   ███    ███ ███       ███    ███ ███    ███   ███    ███ 
- * ▄███▄▄▄     ███    ███  ▄███▄▄▄▄██▀ ███       ███    ███ ███    ███   ███    ███ 
- *▀▀███▀▀▀     ███    ███ ▀▀███▀▀▀▀▀   ███       ███    ███ ███    ███ ▀█████████▀  
- *  ███        ███    ███ ▀███████████ ███       ███    ███ ███    ███   ███        
- *  ███        ███    ███   ███    ███ ███▌    ▄ ███    ███ ███    ███   ███        
- *  ███         ▀██████▀    ███    ███ █████▄▄██  ▀██████▀   ▀██████▀   ▄████▀      
- *                          ███    ███ ▀                                            
- *
- * Keyboard input handling system with focus management and custom keybindings
- * Processes raw terminal input and dispatches to focused elements or global handlers
+ * Input handling - keyboard/mouse parsing, focus manager, keybindings
  */
 
-export type KeyHandler = (key: string, raw: Buffer) => boolean
-export type KeyBinding = { key: string; ctrl?: boolean; alt?: boolean; shift?: boolean; handler: () => void }
+import { EventEmitter } from 'events';
 
-const globalBindings: Map<string, KeyBinding> = new Map()
-const elementBindings: Map<string, KeyBinding[]> = new Map()
+/**
+ * Key event data
+ */
+export interface KeyEvent {
+  name: string;
+  char: string;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  meta: boolean;
+  sequence: string;
+}
 
-let resizeMode = false
-let moveMode = false
-let focusedElementId: string | null = null
+/**
+ * Mouse event data
+ */
+export interface MouseEvent {
+  type: 'press' | 'release' | 'move' | 'drag' | 'scroll';
+  button: 'left' | 'middle' | 'right' | 'none';
+  x: number;
+  y: number;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  scrollDirection?: 'up' | 'down';
+}
 
-export function parseKey(buf: Buffer): { key: string; ctrl: boolean; alt: boolean; shift: boolean } {
-  const str = buf.toString()
-  let key = str
-  let ctrl = false
-  let alt = false
-  let shift = false
-  
-  if (str.charCodeAt(0) < 27 && str.length === 1) {
-    ctrl = true
-    key = String.fromCharCode(str.charCodeAt(0) + 96)
-  }
-  
-  if (str.startsWith("\x1b[") || str.startsWith("\x1bO")) {
-    const seq = str.slice(2)
-    if (seq === "A") key = "up"
-    else if (seq === "B") key = "down"
-    else if (seq === "C") key = "right"
-    else if (seq === "D") key = "left"
-    else if (seq === "H") key = "home"
-    else if (seq === "F") key = "end"
-    else if (seq === "3~") key = "delete"
-    else if (seq === "5~") key = "pageup"
-    else if (seq === "6~") key = "pagedown"
-    else if (seq === "1;5A") { key = "up"; ctrl = true }
-    else if (seq === "1;5B") { key = "down"; ctrl = true }
-    else if (seq === "1;5C") { key = "right"; ctrl = true }
-    else if (seq === "1;5D") { key = "left"; ctrl = true }
-    else if (seq === "1;2A") { key = "up"; shift = true }
-    else if (seq === "1;2B") { key = "down"; shift = true }
-    else if (seq === "1;2C") { key = "right"; shift = true }
-    else if (seq === "1;2D") { key = "left"; shift = true }
-    else if (seq.match(/^\d+;\d+[A-Z]$/)) {
-      const m = seq.match(/^(\d+);(\d+)([A-Z])$/)
-      if (m) {
-        const mod = parseInt(m[2])
-        shift = (mod & 1) !== 0
-        alt = (mod & 2) !== 0
-        ctrl = (mod & 4) !== 0
-        if (m[3] === "A") key = "up"
-        else if (m[3] === "B") key = "down"
-        else if (m[3] === "C") key = "right"
-        else if (m[3] === "D") key = "left"
+/**
+ * Keybind definition
+ */
+export interface Keybind {
+  key: string;
+  ctrl?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+  handler: () => void;
+}
+
+/**
+ * Named key mappings
+ */
+const KEY_NAMES: Record<string, string> = {
+  '\x1b': 'escape',
+  '\r': 'return',
+  '\n': 'return',
+  '\t': 'tab',
+  '\x7f': 'backspace',
+  '\b': 'backspace',
+  ' ': 'space',
+
+  // Arrow keys
+  '\x1b[A': 'up',
+  '\x1b[B': 'down',
+  '\x1b[C': 'right',
+  '\x1b[D': 'left',
+  '\x1bOA': 'up',
+  '\x1bOB': 'down',
+  '\x1bOC': 'right',
+  '\x1bOD': 'left',
+
+  // Function keys
+  '\x1bOP': 'f1',
+  '\x1bOQ': 'f2',
+  '\x1bOR': 'f3',
+  '\x1bOS': 'f4',
+  '\x1b[15~': 'f5',
+  '\x1b[17~': 'f6',
+  '\x1b[18~': 'f7',
+  '\x1b[19~': 'f8',
+  '\x1b[20~': 'f9',
+  '\x1b[21~': 'f10',
+  '\x1b[23~': 'f11',
+  '\x1b[24~': 'f12',
+
+  // Special keys
+  '\x1b[2~': 'insert',
+  '\x1b[3~': 'delete',
+  '\x1b[5~': 'pageup',
+  '\x1b[6~': 'pagedown',
+  '\x1b[H': 'home',
+  '\x1b[F': 'end',
+  '\x1b[1~': 'home',
+  '\x1b[4~': 'end',
+};
+
+/**
+ * Parse a key sequence into a KeyEvent
+ */
+export function parseKey(data: Buffer | string): KeyEvent | null {
+  const str = data.toString();
+
+  // Empty input
+  if (!str) return null;
+
+  const event: KeyEvent = {
+    name: '',
+    char: '',
+    ctrl: false,
+    alt: false,
+    shift: false,
+    meta: false,
+    sequence: str,
+  };
+
+  // Check for escape sequences
+  if (str.startsWith('\x1b')) {
+    // Shift+Tab (back-tab)
+    if (str === '\x1b[Z') {
+      event.name = 'tab';
+      event.shift = true;
+      return event;
+    }
+
+    // Alt + key
+    if (str.length === 2 && str[1] !== '[' && str[1] !== 'O') {
+      event.alt = true;
+      event.char = str[1];
+      event.name = str[1].toLowerCase();
+      return event;
+    }
+
+    // Named sequence
+    if (KEY_NAMES[str]) {
+      event.name = KEY_NAMES[str];
+      return event;
+    }
+
+    // Shift/Ctrl modified arrow keys: \x1b[1;2A (shift+up), \x1b[1;5A (ctrl+up)
+    const modMatch = str.match(/\x1b\[1;(\d)([ABCDF])/);
+    if (modMatch) {
+      const mod = parseInt(modMatch[1]);
+      const dir = { A: 'up', B: 'down', C: 'right', D: 'left', F: 'end' }[modMatch[2]];
+      if (dir) {
+        event.name = dir;
+        event.shift = (mod & 1) !== 0;
+        event.alt = (mod & 2) !== 0;
+        event.ctrl = (mod & 4) !== 0;
+        return event;
       }
     }
+
+    // Unknown escape sequence
+    event.name = 'escape';
+    return event;
   }
-  
-  if (str.startsWith("\x1b") && str.length === 2) {
-    alt = true
-    key = str[1]
-  }
-  
-  if (key === "\t") key = "tab"
-  if (key === "\r") key = "enter"
-  if (key === "\x7f" || key === "\b") key = "backspace"
-  if (key === "\x1b" && str.length === 1) key = "escape"
-  if (key === " ") key = "space"
-  
-  return { key, ctrl, alt, shift }
-}
 
-export function formatKeyBinding(binding: KeyBinding): string {
-  const parts: string[] = []
-  if (binding.ctrl) parts.push("ctrl")
-  if (binding.alt) parts.push("alt")
-  if (binding.shift) parts.push("shift")
-  parts.push(binding.key)
-  return parts.join("+")
-}
-
-export function parseKeyBinding(str: string): Partial<KeyBinding> {
-  const parts = str.toLowerCase().split("+")
-  const result: Partial<KeyBinding> = {}
-  for (const part of parts) {
-    if (part === "ctrl") result.ctrl = true
-    else if (part === "alt") result.alt = true
-    else if (part === "shift") result.shift = true
-    else result.key = part
-  }
-  return result
-}
-
-export function registerGlobalKeybind(binding: KeyBinding): void {
-  globalBindings.set(formatKeyBinding(binding), binding)
-}
-
-export function unregisterGlobalKeybind(keyStr: string): void {
-  globalBindings.delete(keyStr)
-}
-
-export function registerElementKeybind(elementId: string, binding: KeyBinding): void {
-  const bindings = elementBindings.get(elementId) || []
-  bindings.push(binding)
-  elementBindings.set(elementId, bindings)
-}
-
-export function clearElementKeybinds(elementId: string): void {
-  elementBindings.delete(elementId)
-}
-
-export function setFocusedElement(id: string | null): void {
-  focusedElementId = id
-}
-
-export function getFocusedElementId(): string | null {
-  return focusedElementId
-}
-
-export function isResizeMode(): boolean {
-  return resizeMode
-}
-
-export function isMoveMode(): boolean {
-  return moveMode
-}
-
-export function toggleResizeMode(): void {
-  resizeMode = !resizeMode
-  moveMode = false
-}
-
-export function toggleMoveMode(): void {
-  moveMode = !moveMode
-  resizeMode = false
-}
-
-export function exitModes(): void {
-  resizeMode = false
-  moveMode = false
-}
-
-export function matchBinding(parsed: { key: string; ctrl: boolean; alt: boolean; shift: boolean }, binding: KeyBinding): boolean {
-  return parsed.key === binding.key &&
-    (binding.ctrl === undefined || parsed.ctrl === binding.ctrl) &&
-    (binding.alt === undefined || parsed.alt === binding.alt) &&
-    (binding.shift === undefined || parsed.shift === binding.shift)
-}
-
-export function processKeyInput(buf: Buffer): { handled: boolean; action?: string } {
-  const parsed = parseKey(buf)
-  
-  if (parsed.ctrl && parsed.key === "r") {
-    toggleResizeMode()
-    return { handled: true, action: resizeMode ? "resize_mode_on" : "resize_mode_off" }
-  }
-  
-  if (parsed.ctrl && parsed.key === "m") {
-    toggleMoveMode()
-    return { handled: true, action: moveMode ? "move_mode_on" : "move_mode_off" }
-  }
-  
-  for (const [, binding] of globalBindings) {
-    if (matchBinding(parsed, binding)) {
-      binding.handler()
-      return { handled: true, action: "global_binding" }
+  // Named keys (check before control chars to handle Tab, Backspace, etc.)
+  if (KEY_NAMES[str]) {
+    event.name = KEY_NAMES[str];
+    // For character input (space, tab, etc), also set char
+    if (str === ' ' || str === '\t' || str === '\r' || str === '\n') {
+      event.char = str;
     }
+    return event;
   }
-  
-  if (focusedElementId) {
-    const bindings = elementBindings.get(focusedElementId)
-    if (bindings) {
-      for (const binding of bindings) {
-        if (matchBinding(parsed, binding)) {
-          binding.handler()
-          return { handled: true, action: "element_binding" }
+
+  // Control characters (Ctrl+A = 0x01, Ctrl+Z = 0x1a)
+  const code = str.charCodeAt(0);
+  if (code >= 1 && code <= 26) {
+    event.ctrl = true;
+    event.name = String.fromCharCode(code + 96); // Convert to letter
+    event.char = event.name;
+    return event;
+  }
+
+  // Regular character
+  event.char = str[0];
+  event.name = str[0].toLowerCase();
+  event.shift = str[0] !== str[0].toLowerCase();
+
+  return event;
+}
+
+/**
+ * Parse SGR mouse event
+ */
+export function parseMouse(data: Buffer | string): MouseEvent | null {
+  const str = data.toString();
+
+  // SGR mouse format: \x1b[<Cb;Cx;CyM or \x1b[<Cb;Cx;Cym
+  const match = str.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+  if (!match) return null;
+
+  const code = parseInt(match[1]);
+  const x = parseInt(match[2]) - 1;
+  const y = parseInt(match[3]) - 1;
+  const release = match[4] === 'm';
+
+  // Decode button
+  const buttonCode = code & 0x03;
+  const buttons: Array<'left' | 'middle' | 'right' | 'none'> = ['left', 'middle', 'right', 'none'];
+  const button = buttons[buttonCode];
+
+  // Decode modifiers
+  const shift = (code & 0x04) !== 0;
+  const alt = (code & 0x08) !== 0;
+  const ctrl = (code & 0x10) !== 0;
+
+  // Decode event type
+  const motion = (code & 0x20) !== 0;
+  const scroll = (code & 0x40) !== 0;
+
+  let type: MouseEvent['type'];
+  let scrollDirection: 'up' | 'down' | undefined;
+
+  if (scroll) {
+    type = 'scroll';
+    scrollDirection = buttonCode === 0 ? 'up' : 'down';
+  } else if (motion) {
+    type = button !== 'none' ? 'drag' : 'move';
+  } else {
+    type = release ? 'release' : 'press';
+  }
+
+  return {
+    type,
+    button,
+    x,
+    y,
+    ctrl,
+    alt,
+    shift,
+    scrollDirection,
+  };
+}
+
+/**
+ * Focus manager for keyboard navigation
+ */
+export class FocusManager {
+  private focusableElements: Map<string, { tabIndex: number; element: any }> = new Map();
+  private focusedId: string | null = null;
+  private focusOrder: string[] = [];
+
+  /**
+   * Register a focusable element
+   */
+  register(id: string, tabIndex: number, element: any): void {
+    this.focusableElements.set(id, { tabIndex, element });
+    this.updateFocusOrder();
+  }
+
+  /**
+   * Unregister a focusable element
+   */
+  unregister(id: string): void {
+    this.focusableElements.delete(id);
+    if (this.focusedId === id) {
+      this.focusNext();
+    }
+    this.updateFocusOrder();
+  }
+
+  /**
+   * Clear all registered elements
+   */
+  clear(): void {
+    this.focusableElements.clear();
+    this.focusedId = null;
+    this.focusOrder = [];
+  }
+
+  /**
+   * Update focus order based on tabIndex
+   */
+  private updateFocusOrder(): void {
+    const entries = Array.from(this.focusableElements.entries());
+    entries.sort((a, b) => a[1].tabIndex - b[1].tabIndex);
+    this.focusOrder = entries.map(([id]) => id);
+  }
+
+  /**
+   * Get currently focused element ID
+   */
+  getFocusedId(): string | null {
+    return this.focusedId;
+  }
+
+  /**
+   * Set focus to a specific element
+   */
+  focus(id: string): boolean {
+    if (!this.focusableElements.has(id)) {
+      return false;
+    }
+
+    const prevFocused = this.focusedId;
+    this.focusedId = id;
+
+    // Emit blur on previous
+    if (prevFocused && prevFocused !== id) {
+      const prev = this.focusableElements.get(prevFocused);
+      if (prev?.element?.onBlur) {
+        prev.element.onBlur();
+      }
+    }
+
+    // Emit focus on current
+    const current = this.focusableElements.get(id);
+    if (current?.element?.onFocus) {
+      current.element.onFocus();
+    }
+
+    return true;
+  }
+
+  /**
+   * Focus the next element in tab order
+   */
+  focusNext(): string | null {
+    if (this.focusOrder.length === 0) return null;
+
+    if (this.focusedId === null) {
+      this.focus(this.focusOrder[0]);
+      return this.focusedId;
+    }
+
+    const currentIndex = this.focusOrder.indexOf(this.focusedId);
+    const nextIndex = (currentIndex + 1) % this.focusOrder.length;
+    this.focus(this.focusOrder[nextIndex]);
+
+    return this.focusedId;
+  }
+
+  /**
+   * Focus the previous element in tab order
+   */
+  focusPrev(): string | null {
+    if (this.focusOrder.length === 0) return null;
+
+    if (this.focusedId === null) {
+      this.focus(this.focusOrder[this.focusOrder.length - 1]);
+      return this.focusedId;
+    }
+
+    const currentIndex = this.focusOrder.indexOf(this.focusedId);
+    const prevIndex = (currentIndex - 1 + this.focusOrder.length) % this.focusOrder.length;
+    this.focus(this.focusOrder[prevIndex]);
+
+    return this.focusedId;
+  }
+
+  /**
+   * Focus first element
+   */
+  focusFirst(): string | null {
+    if (this.focusOrder.length === 0) return null;
+    this.focus(this.focusOrder[0]);
+    return this.focusedId;
+  }
+
+  /**
+   * Get focused element
+   */
+  getFocusedElement(): any | null {
+    if (!this.focusedId) return null;
+    return this.focusableElements.get(this.focusedId)?.element ?? null;
+  }
+}
+
+/**
+ * Global keybinding manager
+ */
+export class KeybindManager {
+  private keybinds: Keybind[] = [];
+
+  /**
+   * Register a global keybind
+   */
+  register(keybind: Keybind): void {
+    this.keybinds.push(keybind);
+  }
+
+  /**
+   * Unregister a keybind
+   */
+  unregister(key: string, ctrl?: boolean, alt?: boolean, shift?: boolean): void {
+    this.keybinds = this.keybinds.filter(
+      (kb) =>
+        !(
+          kb.key === key &&
+          (ctrl === undefined || kb.ctrl === ctrl) &&
+          (alt === undefined || kb.alt === alt) &&
+          (shift === undefined || kb.shift === shift)
+        )
+    );
+  }
+
+  /**
+   * Clear all keybinds
+   */
+  clear(): void {
+    this.keybinds = [];
+  }
+
+  /**
+   * Handle a key event
+   */
+  handle(event: KeyEvent): boolean {
+    for (const keybind of this.keybinds) {
+      if (
+        keybind.key.toLowerCase() === event.name.toLowerCase() &&
+        (keybind.ctrl ?? false) === event.ctrl &&
+        (keybind.alt ?? false) === event.alt &&
+        (keybind.shift ?? false) === event.shift
+      ) {
+        keybind.handler();
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+/**
+ * Mouse region for click detection
+ */
+export interface MouseRegion {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  onPress?: (event: MouseEvent) => void;
+  onRelease?: (event: MouseEvent) => void;
+  onDrag?: (event: MouseEvent) => void;
+  onClick?: (event: MouseEvent) => void;
+}
+
+/**
+ * Mouse region manager
+ */
+export class MouseManager {
+  private regions: MouseRegion[] = [];
+  private pressedRegion: MouseRegion | null = null;
+
+  /**
+   * Register a mouse region
+   */
+  register(region: MouseRegion): void {
+    this.regions.push(region);
+  }
+
+  /**
+   * Unregister a region
+   */
+  unregister(id: string): void {
+    this.regions = this.regions.filter((r) => r.id !== id);
+  }
+
+  /**
+   * Clear all regions
+   */
+  clear(): void {
+    this.regions = [];
+    this.pressedRegion = null;
+  }
+
+  /**
+   * Handle a mouse event
+   */
+  handle(event: MouseEvent): MouseRegion | null {
+    // Find region at mouse position
+    const region = this.findRegion(event.x, event.y);
+
+    switch (event.type) {
+      case 'press':
+        this.pressedRegion = region;
+        if (region?.onPress) {
+          region.onPress(event);
         }
+        break;
+
+      case 'release':
+        if (region?.onRelease) {
+          region.onRelease(event);
+        }
+        // Click if released on same region
+        if (region && region === this.pressedRegion && region.onClick) {
+          region.onClick(event);
+        }
+        this.pressedRegion = null;
+        break;
+
+      case 'drag':
+        if (this.pressedRegion?.onDrag) {
+          this.pressedRegion.onDrag(event);
+        }
+        break;
+    }
+
+    return region;
+  }
+
+  /**
+   * Find region at position (in reverse order for z-index)
+   */
+  private findRegion(x: number, y: number): MouseRegion | null {
+    for (let i = this.regions.length - 1; i >= 0; i--) {
+      const r = this.regions[i];
+      if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+        return r;
       }
     }
+    return null;
   }
-  
-  return { handled: false }
 }
 
-export function createKeyboardHandler(
-  onNavigate: (direction: string) => void,
-  onActivate: () => void,
-  onEscape: () => void
-): KeyHandler {
-  return (key: string, raw: Buffer): boolean => {
-    const parsed = parseKey(raw)
-    
-    if (parsed.key === "tab" && !parsed.shift) {
-      onNavigate("next")
-      return true
-    }
-    
-    if (parsed.key === "tab" && parsed.shift) {
-      onNavigate("prev")
-      return true
-    }
-    
-    if (parsed.key === "up") {
-      onNavigate("up")
-      return true
-    }
-    
-    if (parsed.key === "down") {
-      onNavigate("down")
-      return true
-    }
-    
-    if (parsed.key === "left") {
-      onNavigate("left")
-      return true
-    }
-    
-    if (parsed.key === "right") {
-      onNavigate("right")
-      return true
-    }
-    
-    if (parsed.key === "enter" || parsed.key === "space") {
-      onActivate()
-      return true
-    }
-    
-    if (parsed.key === "escape") {
-      onEscape()
-      return true
-    }
-    
-    return false
+/**
+ * Input handler that combines keyboard and mouse handling
+ */
+export class InputHandler extends EventEmitter {
+  private stdin: NodeJS.ReadStream;
+  private focusManager: FocusManager;
+  private keybindManager: KeybindManager;
+  private mouseManager: MouseManager;
+  private inputBuffer: string = '';
+
+  constructor(stdin: NodeJS.ReadStream = process.stdin) {
+    super();
+    this.stdin = stdin;
+    this.focusManager = new FocusManager();
+    this.keybindManager = new KeybindManager();
+    this.mouseManager = new MouseManager();
   }
+
+  /**
+   * Start listening for input
+   */
+  start(): void {
+    this.stdin.setRawMode?.(true);
+    this.stdin.resume();
+    this.stdin.on('data', this.handleData);
+  }
+
+  /**
+   * Stop listening for input
+   */
+  stop(): void {
+    this.stdin.off('data', this.handleData);
+    this.stdin.setRawMode?.(false);
+    this.stdin.pause();
+  }
+
+  /**
+   * Handle raw input data
+   */
+  private handleData = (data: Buffer): void => {
+    const str = data.toString();
+
+    // Check for mouse events
+    const mouse = parseMouse(str);
+    if (mouse) {
+      this.emit('mouse', mouse);
+      this.mouseManager.handle(mouse);
+      return;
+    }
+
+    // Parse key event
+    const key = parseKey(data);
+    if (key) {
+      this.emit('key', key);
+
+      // Check global keybinds first
+      if (this.keybindManager.handle(key)) {
+        return;
+      }
+
+      // Handle focus navigation
+      if (key.name === 'tab') {
+        if (key.shift) {
+          this.focusManager.focusPrev();
+        } else {
+          this.focusManager.focusNext();
+        }
+        this.emit('focus', this.focusManager.getFocusedId());
+        // Don't return early - let Tab also emit keypress for display
+      }
+
+      // Handle input for focused element
+      const focused = this.focusManager.getFocusedElement();
+      if (focused?.onKeypress) {
+        focused.onKeypress(key);
+      }
+
+      // Emit key for element handlers
+      this.emit('keypress', key);
+    }
+  };
+
+  /**
+   * Get focus manager
+   */
+  getFocusManager(): FocusManager {
+    return this.focusManager;
+  }
+
+  /**
+   * Get keybind manager
+   */
+  getKeybindManager(): KeybindManager {
+    return this.keybindManager;
+  }
+
+  /**
+   * Get mouse manager
+   */
+  getMouseManager(): MouseManager {
+    return this.mouseManager;
+  }
+
+  /**
+   * Register a global keybind (convenience method)
+   */
+  registerGlobalKeybind(keybind: Keybind): void {
+    this.keybindManager.register(keybind);
+  }
+}
+
+/**
+ * Export convenience function
+ */
+export function registerGlobalKeybind(keybind: Keybind): void {
+  // This will be set up by the app runtime
+  globalKeybindManager?.register(keybind);
+}
+
+// Global singleton (set by app runtime)
+let globalKeybindManager: KeybindManager | null = null;
+
+export function setGlobalKeybindManager(manager: KeybindManager): void {
+  globalKeybindManager = manager;
 }
