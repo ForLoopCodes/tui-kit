@@ -63,6 +63,10 @@ export interface StyleProps {
 
   // Overflow
   overflow?: 'visible' | 'hidden' | 'scroll';
+  scrollX?: number;
+  scrollY?: number;
+  scrollbarColor?: string;
+  scrollbarTrackColor?: string;
 
   // Interactivity
   focusable?: boolean;

@@ -132,15 +132,29 @@ export function parseKey(data: Buffer | string): KeyEvent | null {
     }
 
     // Shift/Ctrl modified arrow keys: \x1b[1;2A (shift+up), \x1b[1;5A (ctrl+up)
-    const modMatch = str.match(/\x1b\[1;(\d)([ABCDF])/);
+    // Try different formats: \x1b[1;mX or \x1b[mX
+    let modMatch = str.match(/\x1b\[1;(\d)([ABCDF])/);
+    if (!modMatch) {
+      modMatch = str.match(/\x1b\[(?:1;)?(\d+)([ABCDF])/);
+    }
     if (modMatch) {
       const mod = parseInt(modMatch[1]);
       const dir = { A: 'up', B: 'down', C: 'right', D: 'left', F: 'end' }[modMatch[2]];
       if (dir) {
         event.name = dir;
-        event.shift = (mod & 1) !== 0;
-        event.alt = (mod & 2) !== 0;
-        event.ctrl = (mod & 4) !== 0;
+        // CSI modifier codes: 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=shift+alt+ctrl
+        // But also handle bitwise: shift=1, alt=2, ctrl=4
+        if (mod <= 8) {
+          // Standard CSI codes
+          event.shift = mod === 2 || mod === 4 || mod === 6 || mod === 8;
+          event.alt = mod === 3 || mod === 4 || mod === 7 || mod === 8;
+          event.ctrl = mod === 5 || mod === 6 || mod === 7 || mod === 8;
+        } else {
+          // Bitwise codes
+          event.shift = (mod & 1) !== 0;
+          event.alt = (mod & 2) !== 0;
+          event.ctrl = (mod & 4) !== 0;
+        }
         return event;
       }
     }

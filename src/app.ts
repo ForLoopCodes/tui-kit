@@ -3,7 +3,7 @@
  */
 
 import { ScreenBuffer, renderLayout, Terminal } from './render';
-import { layout, LayoutNode, findFocusable } from './layout';
+import { layout, LayoutNode, findFocusable, parseSpacing, getBorderThickness } from './layout';
 import { InputHandler, setGlobalKeybindManager, KeyEvent, MouseEvent } from './input';
 import { VNode, renderVNode, setRerenderCallback, createComponentContext, runWithHooks, StyleProps } from './elements';
 
@@ -50,7 +50,11 @@ interface ElementState {
   id: string;
   value?: string;
   checked?: boolean;
+  scrollX?: number;
+  scrollY?: number;
 }
+
+const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 /**
  * Create an app instance (non-blocking)
@@ -192,8 +196,63 @@ export function createApp(
     // Get or create element state
     let state = elementStates.get(id);
     if (!state) {
-      state = { id, value: props.value || '', checked: props.checked || false };
+      state = {
+        id,
+        value: props.value || '',
+        checked: props.checked || false,
+        scrollX: typeof props.scrollX === 'number' ? props.scrollX : 0,
+        scrollY: typeof props.scrollY === 'number' ? props.scrollY : 0,
+      };
       elementStates.set(id, state);
+    }
+
+    // Handle scrolling for scrollable containers
+    if (props.overflow === 'scroll') {
+      const padding = parseSpacing(props.padding);
+      const borderSize = getBorderThickness(props.border);
+      const innerWidth = Math.max(0, node.rect.width - padding.left - padding.right - borderSize * 2);
+      const innerHeight = Math.max(0, node.rect.height - padding.top - padding.bottom - borderSize * 2);
+      const maxScrollX = Math.max(0, node.contentWidth - innerWidth);
+      const maxScrollY = Math.max(0, node.contentHeight - innerHeight);
+
+      let dx = 0;
+      let dy = 0;
+
+      switch (key.name) {
+        case 'up':
+          dy = -1;
+          break;
+        case 'down':
+          dy = 1;
+          break;
+        case 'left':
+          dx = -1;
+          break;
+        case 'right':
+          dx = 1;
+          break;
+        case 'pageup':
+          dy = -Math.max(1, innerHeight - 1);
+          break;
+        case 'pagedown':
+          dy = Math.max(1, innerHeight - 1);
+          break;
+        case 'home':
+          dy = -maxScrollY;
+          break;
+        case 'end':
+          dy = maxScrollY;
+          break;
+      }
+
+      if (dx !== 0 || dy !== 0) {
+        const currentScrollX = typeof state.scrollX === 'number' ? state.scrollX : (typeof props.scrollX === 'number' ? props.scrollX : 0);
+        const currentScrollY = typeof state.scrollY === 'number' ? state.scrollY : (typeof props.scrollY === 'number' ? props.scrollY : 0);
+        state.scrollX = clamp(currentScrollX + dx, 0, maxScrollX);
+        state.scrollY = clamp(currentScrollY + dy, 0, maxScrollY);
+        requestRender();
+        return;
+      }
     }
 
     // Handle input elements
@@ -248,6 +307,12 @@ export function createApp(
       if (state.checked !== undefined && props.checked === undefined) {
         props.checked = state.checked;
       }
+      if (state.scrollX !== undefined && props.scrollX === undefined) {
+        props.scrollX = state.scrollX;
+      }
+      if (state.scrollY !== undefined && props.scrollY === undefined) {
+        props.scrollY = state.scrollY;
+      }
     }
 
     // Recurse into children
@@ -263,6 +328,46 @@ export function createApp(
   // Mouse event handler
   const handleMouse = (event: MouseEvent) => {
     if (!layoutTree) return;
+
+    if (event.type === 'scroll') {
+      const target = findScrollableAt(layoutTree, event.x, event.y);
+      if (!target) return;
+
+      const props = target.node.props as any;
+      const id = props.id;
+      if (!id || props.overflow !== 'scroll') return;
+
+      let state = elementStates.get(id);
+      if (!state) {
+        state = {
+          id,
+          value: props.value || '',
+          checked: props.checked || false,
+          scrollX: typeof props.scrollX === 'number' ? props.scrollX : 0,
+          scrollY: typeof props.scrollY === 'number' ? props.scrollY : 0,
+        };
+        elementStates.set(id, state);
+      }
+
+      const padding = parseSpacing(props.padding);
+      const borderSize = getBorderThickness(props.border);
+      const innerWidth = Math.max(0, target.rect.width - padding.left - padding.right - borderSize * 2);
+      const innerHeight = Math.max(0, target.rect.height - padding.top - padding.bottom - borderSize * 2);
+      const maxScrollX = Math.max(0, target.contentWidth - innerWidth);
+      const maxScrollY = Math.max(0, target.contentHeight - innerHeight);
+
+      const delta = event.scrollDirection === 'up' ? -3 : 3;
+      if (event.shift) {
+        const currentScrollX = typeof state.scrollX === 'number' ? state.scrollX : 0;
+        state.scrollX = clamp(currentScrollX + delta, 0, maxScrollX);
+      } else {
+        const currentScrollY = typeof state.scrollY === 'number' ? state.scrollY : 0;
+        state.scrollY = clamp(currentScrollY + delta, 0, maxScrollY);
+      }
+
+      requestRender();
+      return;
+    }
 
     // Hit test
     const hit = hitTestLayout(layoutTree, event.x, event.y);
@@ -299,6 +404,26 @@ export function createApp(
     }
 
     return node;
+  };
+
+  const findScrollableAt = (node: LayoutNode, x: number, y: number): LayoutNode | null => {
+    const { rect, children } = node;
+
+    if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) {
+      return null;
+    }
+
+    for (let i = children.length - 1; i >= 0; i--) {
+      const hit = findScrollableAt(children[i], x, y);
+      if (hit) return hit;
+    }
+
+    const props = node.node.props as StyleProps;
+    if (props.overflow === 'scroll') {
+      return node;
+    }
+
+    return null;
   };
 
   // Resize handler
@@ -369,6 +494,59 @@ export function createApp(
     input.registerGlobalKeybind({
       key: 'escape',
       handler: exit,
+    });
+
+    // Page scroll keybinds
+    input.registerGlobalKeybind({
+      key: 'up',
+      ctrl: true,
+      handler: () => {
+        if (!layoutTree) return;
+        let state = elementStates.get('page');
+        if (!state) {
+          state = {
+            id: 'page',
+            value: '',
+            checked: false,
+            scrollX: 0,
+            scrollY: 0,
+          };
+          elementStates.set('page', state);
+        }
+        const padding = parseSpacing([1, 1]);
+        const borderSize = 0;
+        const innerHeight = Math.max(0, layoutTree.rect.height - padding.top - padding.bottom - borderSize * 2);
+        const maxScrollY = Math.max(0, layoutTree.contentHeight - innerHeight);
+        const currentScrollY = typeof state.scrollY === 'number' ? state.scrollY : 0;
+        state.scrollY = clamp(currentScrollY - 5, 0, maxScrollY);
+        requestRender();
+      },
+    });
+
+    input.registerGlobalKeybind({
+      key: 'down',
+      ctrl: true,
+      handler: () => {
+        if (!layoutTree) return;
+        let state = elementStates.get('page');
+        if (!state) {
+          state = {
+            id: 'page',
+            value: '',
+            checked: false,
+            scrollX: 0,
+            scrollY: 0,
+          };
+          elementStates.set('page', state);
+        }
+        const padding = parseSpacing([1, 1]);
+        const borderSize = 0;
+        const innerHeight = Math.max(0, layoutTree.rect.height - padding.top - padding.bottom - borderSize * 2);
+        const maxScrollY = Math.max(0, layoutTree.contentHeight - innerHeight);
+        const currentScrollY = typeof state.scrollY === 'number' ? state.scrollY : 0;
+        state.scrollY = clamp(currentScrollY + 5, 0, maxScrollY);
+        requestRender();
+      },
     });
 
     // Listen for events

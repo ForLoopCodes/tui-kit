@@ -31,19 +31,27 @@ const formatKey = (key: KeyEvent): string => {
 };
 
 let setLastKey: ((value: string) => void) | null = null;
+let setPageScroll: ((value: number | ((prev: number) => number)) => void) | null = null;
 
 // Demo App Component
 const App = () => {
   const [lastKey, setLastKeyState] = useState("");
+  const [pageScroll, setPageScrollState] = useState(0);
   setLastKey = setLastKeyState;
+  setPageScroll = setPageScrollState;
 
   return (
     <box
+      id="page"
       width="100%"
       height="100%"
       flexDirection="column"
       padding={1}
       bg="#1a1a2e"
+      overflow="scroll"
+      scrollY={pageScroll}
+      scrollbarColor="#16c79a"
+      scrollbarTrackColor="#0f3460"
     >
       {/* Header */}
       <box border="rounded" borderColor="#e94560" padding={[0, 2]} width="100%">
@@ -182,6 +190,40 @@ const App = () => {
           <text bold underline color="#48dbfb">
             Bold + Underlined
           </text>
+
+          <br />
+          <text bold underline color="#16c79a">
+            Scrollable Panel
+          </text>
+          <box
+            id="scroll-panel"
+            tabIndex={6}
+            focusable
+            border="single"
+            borderColor="#0f3460"
+            padding={[0, 1]}
+            height={8}
+            overflow="scroll"
+            scrollbarColor="#feca57"
+            scrollbarTrackColor="#2d2d44"
+          >
+            <text color="#888">Use ↑/↓ or PgUp/PgDn</text>
+            <text color="#888">to scroll this panel.</text>
+            <text>• Item 01</text>
+            <text>• Item 02</text>
+            <text>• Item 03</text>
+            <text>• Item 04</text>
+            <text>• Item 05</text>
+            <text>• Item 06</text>
+            <text>• Item 07</text>
+            <text>• Item 08</text>
+            <text>• Item 09</text>
+            <text>• Item 10</text>
+            <text>• Item 11</text>
+            <text>• Item 12</text>
+            <text>• Item 13</text>
+            <text>• Item 14</text>
+          </box>
         </box>
       </box>
 
@@ -238,6 +280,43 @@ const App = () => {
         </box>
       </box>
 
+      {/* Long content for page scrolling */}
+      <box
+        border="single"
+        borderColor="#0f3460"
+        padding={1}
+        width="100%"
+        flexDirection="column"
+      >
+        <text bold underline color="#16c79a">
+          Long Content
+        </text>
+        <text dim color="#888">
+          Ctrl+↑/↓ scrolls the whole page
+        </text>
+        <br />
+        <text>• Scroll demo line 01</text>
+        <text>• Scroll demo line 02</text>
+        <text>• Scroll demo line 03</text>
+        <text>• Scroll demo line 04</text>
+        <text>• Scroll demo line 05</text>
+        <text>• Scroll demo line 06</text>
+        <text>• Scroll demo line 07</text>
+        <text>• Scroll demo line 08</text>
+        <text>• Scroll demo line 09</text>
+        <text>• Scroll demo line 10</text>
+        <text>• Scroll demo line 11</text>
+        <text>• Scroll demo line 12</text>
+        <text>• Scroll demo line 13</text>
+        <text>• Scroll demo line 14</text>
+        <text>• Scroll demo line 15</text>
+        <text>• Scroll demo line 16</text>
+        <text>• Scroll demo line 17</text>
+        <text>• Scroll demo line 18</text>
+        <text>• Scroll demo line 19</text>
+        <text>• Scroll demo line 20</text>
+      </box>
+
       {/* Footer */}
       <box
         width="100%"
@@ -246,7 +325,7 @@ const App = () => {
         padding={[1, 0]}
       >
         <text dim color="#666">
-          Press Tab to navigate • Enter/Space to activate • q or Esc to exit
+          Tab to navigate • Enter/Space to activate • Ctrl+↑/↓ page scroll • q/Esc exit
         </text>
       </box>
     </box>

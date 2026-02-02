@@ -165,6 +165,160 @@ function normalizeDimension(value: number): number {
   return Math.max(0, Math.floor(value));
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+interface ClipRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function intersectClip(a: ClipRect | null | undefined, b: ClipRect | null | undefined): ClipRect | null {
+  if (!a && !b) return null;
+  if (!a) return b ?? null;
+  if (!b) return a ?? null;
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  const width = right - x;
+  const height = bottom - y;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function clipRect(rect: ClipRect, clip: ClipRect | null | undefined): ClipRect | null {
+  return intersectClip(rect, clip);
+}
+
+function writeCharClipped(
+  ctx: RenderContext,
+  x: number,
+  y: number,
+  char: string,
+  fg?: RGBA | null,
+  bg?: RGBA | null,
+  styles?: Partial<Record<TextStyle, boolean>>
+): void {
+  const clip = ctx.clip;
+  if (clip) {
+    if (x < clip.x || x >= clip.x + clip.width || y < clip.y || y >= clip.y + clip.height) {
+      return;
+    }
+  }
+  ctx.buffer.writeChar(x, y, char, fg, bg, styles);
+}
+
+function writeTextClipped(
+  ctx: RenderContext,
+  x: number,
+  y: number,
+  text: string,
+  fg?: RGBA | null,
+  bg?: RGBA | null,
+  styles?: Partial<Record<TextStyle, boolean>>,
+  maxWidth?: number
+): void {
+  const clip = ctx.clip;
+  if (!clip) {
+    ctx.buffer.writeText(x, y, text, fg, bg, styles, maxWidth);
+    return;
+  }
+
+  if (!Number.isFinite(y)) return;
+  const yi = Math.floor(y);
+  if (yi < clip.y || yi >= clip.y + clip.height) return;
+
+  const plain = stripAnsi(String(text ?? ''));
+  let startX = Number.isFinite(x) ? Math.floor(x) : 0;
+  let availableWidth =
+    maxWidth !== undefined && Number.isFinite(maxWidth) ? Math.floor(maxWidth) : textWidth(plain);
+
+  if (availableWidth <= 0) return;
+
+  const clipStart = clip.x;
+  const clipEnd = clip.x + clip.width;
+  const drawStart = Math.max(startX, clipStart);
+  const drawEnd = Math.min(startX + availableWidth, clipEnd);
+  const visibleWidth = drawEnd - drawStart;
+  if (visibleWidth <= 0) return;
+
+  const startCol = Math.max(0, drawStart - startX);
+  const clipped = sliceByColumns(plain, startCol, visibleWidth);
+  if (!clipped) return;
+
+  ctx.buffer.writeText(drawStart, yi, clipped, fg, bg, styles, visibleWidth);
+}
+
+function fillRectClipped(
+  ctx: RenderContext,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  char: string = ' ',
+  fg?: RGBA | null,
+  bg?: RGBA | null
+): void {
+  const rect = clipRect({ x, y, width, height }, ctx.clip);
+  if (!rect) return;
+  ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, char, fg, bg);
+}
+
+function drawBorderClipped(
+  ctx: RenderContext,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  style: BorderStyle = 'single',
+  fg?: RGBA | null,
+  bg?: RGBA | null
+): void {
+  if (width <= 0 || height <= 0) return;
+  if (width < 2 || height < 2) {
+    writeCharClipped(ctx, x, y, '┼', fg, bg);
+    return;
+  }
+
+  const chars = BORDER_CHARS[style] || BORDER_CHARS.single;
+
+  const x2 = x + width - 1;
+  const y2 = y + height - 1;
+
+  writeCharClipped(ctx, x, y, chars.topLeft, fg, bg);
+  writeCharClipped(ctx, x2, y, chars.topRight, fg, bg);
+  writeCharClipped(ctx, x, y2, chars.bottomLeft, fg, bg);
+  writeCharClipped(ctx, x2, y2, chars.bottomRight, fg, bg);
+
+  for (let dx = 1; dx < width - 1; dx++) {
+    writeCharClipped(ctx, x + dx, y, chars.horizontal, fg, bg);
+    writeCharClipped(ctx, x + dx, y2, chars.horizontal, fg, bg);
+  }
+
+  for (let dy = 1; dy < height - 1; dy++) {
+    writeCharClipped(ctx, x, y + dy, chars.vertical, fg, bg);
+    writeCharClipped(ctx, x2, y + dy, chars.vertical, fg, bg);
+  }
+}
+
+function drawHLineClipped(
+  ctx: RenderContext,
+  x: number,
+  y: number,
+  length: number,
+  char: string = '─',
+  fg?: RGBA | null,
+  bg?: RGBA | null
+): void {
+  for (let i = 0; i < length; i++) {
+    writeCharClipped(ctx, x + i, y, char, fg, bg);
+  }
+}
+
 /**
  * Screen buffer for double-buffered rendering
  */
@@ -556,6 +710,7 @@ interface RenderContext {
   focusedId: string | null;
   fg: RGBA | null;
   bg: RGBA | null;
+  clip: ClipRect | null;
 }
 
 /**
@@ -566,15 +721,22 @@ export function renderLayout(
   buffer: ScreenBuffer,
   focusedId: string | null = null
 ): void {
-  const ctx: RenderContext = { buffer, focusedId, fg: null, bg: null };
+  const ctx: RenderContext = { buffer, focusedId, fg: null, bg: null, clip: null };
   renderNode(layout, ctx);
 }
 
 /**
  * Render a single node
  */
-function renderNode(layoutNode: LayoutNode, ctx: RenderContext): void {
-  const { node, rect, children } = layoutNode;
+function renderNode(layoutNode: LayoutNode, ctx: RenderContext, offsetX: number = 0, offsetY: number = 0): void {
+  const { node, children } = layoutNode;
+  const rect = {
+    x: layoutNode.rect.x + offsetX,
+    y: layoutNode.rect.y + offsetY,
+    width: layoutNode.rect.width,
+    height: layoutNode.rect.height,
+  };
+  const effectiveNode: LayoutNode = { ...layoutNode, rect };
   const props = node.props as StyleProps;
 
   // Parse colors
@@ -595,12 +757,13 @@ function renderNode(layoutNode: LayoutNode, ctx: RenderContext): void {
 
   // Fill background
   if (effectiveBg) {
-    ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, ' ', null, effectiveBg);
+    fillRectClipped(ctx, rect.x, rect.y, rect.width, rect.height, ' ', null, effectiveBg);
   }
 
   // Draw border
   if (props.border && props.border !== 'none') {
-    ctx.buffer.drawBorder(
+    drawBorderClipped(
+      ctx,
       rect.x,
       rect.y,
       rect.width,
@@ -616,21 +779,21 @@ function renderNode(layoutNode: LayoutNode, ctx: RenderContext): void {
 
   if (type === 'text' || type === 'box') {
     // Render text children
-    renderTextContent(layoutNode, ctx, fg, effectiveBg, props);
+    renderTextContent(effectiveNode, ctx, fg, effectiveBg, props);
   } else if (type === 'input' || type === 'textbox') {
-    renderInput(layoutNode, ctx, isFocused, fg, bg);
+    renderInput(effectiveNode, ctx, isFocused, fg, bg);
   } else if (type === 'button') {
-    renderButton(layoutNode, ctx, isFocused, fg, bg);
+    renderButton(effectiveNode, ctx, isFocused, fg, bg);
   } else if (type === 'checkbox') {
-    renderCheckbox(layoutNode, ctx, isFocused, fg, bg);
+    renderCheckbox(effectiveNode, ctx, isFocused, fg, bg);
   } else if (type === 'select') {
-    renderSelect(layoutNode, ctx, isFocused, fg, bg);
+    renderSelect(effectiveNode, ctx, isFocused, fg, bg);
   } else if (type === 'hr') {
-    renderHr(layoutNode, ctx, fg);
+    renderHr(effectiveNode, ctx, fg);
   } else if (type === 'ul' || type === 'ol') {
-    renderList(layoutNode, ctx, fg, bg);
+    renderList(effectiveNode, ctx, fg, bg);
   } else if (type === 'table') {
-    renderTable(layoutNode, ctx, fg, bg);
+    renderTable(effectiveNode, ctx, fg, bg);
   }
 
   // Render children (for container elements)
@@ -644,16 +807,32 @@ function renderNode(layoutNode: LayoutNode, ctx: RenderContext): void {
     type === 'hr';
 
   if (!skipChildren) {
-    const childCtx: RenderContext = { ...ctx, fg, bg };
+    let childCtx: RenderContext = { ...ctx, fg, bg };
+    let childOffsetX = offsetX;
+    let childOffsetY = offsetY;
+
+    if (props.overflow === 'scroll' || props.overflow === 'hidden') {
+      const clip = {
+        x: rect.x + padding.left + borderSize,
+        y: rect.y + padding.top + borderSize,
+        width: Math.max(0, rect.width - padding.left - padding.right - borderSize * 2),
+        height: Math.max(0, rect.height - padding.top - padding.bottom - borderSize * 2),
+      };
+      childCtx = { ...childCtx, clip: intersectClip(ctx.clip, clip) };
+      childOffsetX -= layoutNode.scrollX;
+      childOffsetY -= layoutNode.scrollY;
+    }
+
     for (const child of children) {
-      renderNode(child, childCtx);
+      renderNode(child, childCtx, childOffsetX, childOffsetY);
     }
   }
 
   // Draw focus indicator
   if (isFocused && props.border && props.border !== 'none') {
     const focusBorderColor = parseColor(props.borderColor) ?? borderColor;
-    ctx.buffer.drawBorder(
+    drawBorderClipped(
+      ctx,
       rect.x,
       rect.y,
       rect.width,
@@ -662,6 +841,10 @@ function renderNode(layoutNode: LayoutNode, ctx: RenderContext): void {
       focusBorderColor,
       effectiveBg
     );
+  }
+
+  if (props.overflow === 'scroll') {
+    renderScrollbars(effectiveNode, ctx, fg, effectiveBg, padding, borderSize);
   }
 }
 
@@ -715,7 +898,7 @@ function renderTextContent(
       x = innerX + innerWidth - lineWidth;
     }
 
-    ctx.buffer.writeText(x, innerY + i, line, fg, bg, styles, innerWidth);
+    writeTextClipped(ctx, x, innerY + i, line, fg, bg, styles, innerWidth);
   }
 }
 
@@ -777,12 +960,12 @@ function renderInput(
   const focusBorderColor = parseColor('#00aaff');
 
   // Fill background
-  ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, ' ', null, focusBg);
+  fillRectClipped(ctx, rect.x, rect.y, rect.width, rect.height, ' ', null, focusBg);
 
   // Draw border (always show a border for input visibility)
   if (canDrawBorder) {
     const borderColor = isFocused ? focusBorderColor : parseColor('#4a7c8a');
-    ctx.buffer.drawBorder(rect.x, rect.y, rect.width, rect.height, 'single', borderColor, focusBg);
+    drawBorderClipped(ctx, rect.x, rect.y, rect.width, rect.height, 'single', borderColor, focusBg);
   }
 
   // Get display text
@@ -812,14 +995,14 @@ function renderInput(
   // Draw text
   const textFg = !props.value && props.placeholder ? parseColor('#888888') : fg;
   const textY = innerY + Math.floor(innerHeight / 2);
-  ctx.buffer.writeText(innerX, textY, displayText, textFg, focusBg, undefined, innerWidth);
+  writeTextClipped(ctx, innerX, textY, displayText, textFg, focusBg, undefined, innerWidth);
 
   // Draw cursor
   if (isFocused) {
     const cursorX = innerX + textWidth(displayText);
     const maxCursorX = innerX + innerWidth - 1;
     if (cursorX <= maxCursorX) {
-      ctx.buffer.writeChar(cursorX, textY, '▌', focusBorderColor, focusBg);
+      writeCharClipped(ctx, cursorX, textY, '▌', focusBorderColor, focusBg);
     }
   }
 }
@@ -849,11 +1032,12 @@ function renderButton(
   const borderColor = isFocused ? (focusBorderColor ?? normalBorderColor) : normalBorderColor;
 
   // Fill background
-  ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, ' ', null, bg);
+  fillRectClipped(ctx, rect.x, rect.y, rect.width, rect.height, ' ', null, bg);
 
   // Draw border
   if (hasBorder && rect.width >= 2 && rect.height >= 2) {
-    ctx.buffer.drawBorder(
+    drawBorderClipped(
+      ctx,
       rect.x,
       rect.y,
       rect.width,
@@ -877,11 +1061,11 @@ function renderButton(
   const x = innerX + Math.floor((innerWidth - textW) / 2);
   const y = innerY + Math.floor(innerHeight / 2);
 
-  ctx.buffer.writeText(x, y, truncatedText, fg, bg, { bold: true });
+  writeTextClipped(ctx, x, y, truncatedText, fg, bg, { bold: true });
 
   // Draw a subtle focus outline even if no border is set
   if (!hasBorder && isFocused && rect.width >= 2 && rect.height >= 2) {
-    ctx.buffer.drawBorder(rect.x, rect.y, rect.width, rect.height, 'single', focusBorderColor, bg);
+    drawBorderClipped(ctx, rect.x, rect.y, rect.width, rect.height, 'single', focusBorderColor, bg);
   }
 }
 
@@ -905,11 +1089,11 @@ function renderCheckbox(
   const checkChar = props.checked ? '☑' : '☐';
   const focusColor = isFocused ? parseColor('#00ff00') : fg;
 
-  ctx.buffer.writeChar(rect.x, rect.y, checkChar, focusColor, bg);
+  writeCharClipped(ctx, rect.x, rect.y, checkChar, focusColor, bg);
 
   // Draw label
   if (props.label) {
-    ctx.buffer.writeText(rect.x + 2, rect.y, props.label, fg, bg);
+    writeTextClipped(ctx, rect.x + 2, rect.y, props.label, fg, bg);
   }
 }
 
@@ -931,10 +1115,11 @@ function renderSelect(
   const focusBg = isFocused ? parseColor('#1a1a4e') ?? bg : bg;
 
   // Fill background
-  ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, ' ', null, focusBg);
+  fillRectClipped(ctx, rect.x, rect.y, rect.width, rect.height, ' ', null, focusBg);
 
   // Draw border
-  ctx.buffer.drawBorder(
+  drawBorderClipped(
+    ctx,
     rect.x,
     rect.y,
     rect.width,
@@ -949,10 +1134,10 @@ function renderSelect(
   const innerWidth = Math.max(0, rect.width - 4); // Leave room for arrow
   const truncated = textWidth(displayValue) > innerWidth ? sliceByColumns(displayValue, 0, innerWidth) : displayValue;
 
-  ctx.buffer.writeText(rect.x + 1, rect.y + Math.floor(rect.height / 2), truncated, fg, focusBg);
+  writeTextClipped(ctx, rect.x + 1, rect.y + Math.floor(rect.height / 2), truncated, fg, focusBg);
 
   // Draw dropdown arrow
-  ctx.buffer.writeChar(rect.x + rect.width - 2, rect.y + Math.floor(rect.height / 2), '▼', fg, focusBg);
+  writeCharClipped(ctx, rect.x + rect.width - 2, rect.y + Math.floor(rect.height / 2), '▼', fg, focusBg);
 }
 
 /**
@@ -965,7 +1150,7 @@ function renderHr(layoutNode: LayoutNode, ctx: RenderContext, inheritedFg: RGBA 
   const fg = parseColor(props.color) ?? inheritedFg ?? { r: 128, g: 128, b: 128, a: 1 };
   const char = props.char || '─';
 
-  ctx.buffer.drawHLine(rect.x, rect.y, rect.width, char, fg, null);
+  drawHLineClipped(ctx, rect.x, rect.y, rect.width, char, fg, null);
 }
 
 /**
@@ -986,7 +1171,7 @@ function renderList(layoutNode: LayoutNode, ctx: RenderContext, inheritedFg: RGB
     const bullet = isOrdered ? `${i + 1}. ` : '• ';
     const text = getTextContentFromChildren(child.node.children);
 
-    ctx.buffer.writeText(rect.x, y, bullet + text, fg, bg);
+    writeTextClipped(ctx, rect.x, y, bullet + text, fg, bg);
     y++;
   }
 }
@@ -1004,10 +1189,77 @@ function renderTable(layoutNode: LayoutNode, ctx: RenderContext, inheritedFg: RG
 
   // For now, just render a simple bordered table
   // Full table implementation would need to calculate column widths
-  ctx.buffer.fillRect(rect.x, rect.y, rect.width, rect.height, ' ', fg, bg);
+  fillRectClipped(ctx, rect.x, rect.y, rect.width, rect.height, ' ', fg, bg);
 
   if (props.border && props.border !== 'none') {
-    ctx.buffer.drawBorder(rect.x, rect.y, rect.width, rect.height, props.border as BorderStyle, borderColor, bg);
+    drawBorderClipped(ctx, rect.x, rect.y, rect.width, rect.height, props.border as BorderStyle, borderColor, bg);
+  }
+}
+
+/**
+ * Render scrollbars for scrollable containers
+ */
+function renderScrollbars(
+  layoutNode: LayoutNode,
+  ctx: RenderContext,
+  inheritedFg: RGBA | null,
+  inheritedBg: RGBA | null,
+  padding: { top: number; right: number; bottom: number; left: number },
+  borderSize: number
+): void {
+  const props = layoutNode.node.props as StyleProps;
+  const rect = layoutNode.rect;
+
+  const innerX = rect.x + padding.left + borderSize;
+  const innerY = rect.y + padding.top + borderSize;
+  const innerWidth = Math.max(0, rect.width - padding.left - padding.right - borderSize * 2);
+  const innerHeight = Math.max(0, rect.height - padding.top - padding.bottom - borderSize * 2);
+  if (innerWidth <= 0 || innerHeight <= 0) return;
+
+  const totalHeight = Math.max(1, layoutNode.contentHeight);
+  const totalWidth = Math.max(1, layoutNode.contentWidth);
+  const showV = totalHeight > innerHeight;
+  const showH = totalWidth > innerWidth;
+
+  if (!showV && !showH) return;
+
+  const thumbColor = parseColor(props.scrollbarColor) ?? parseColor('#16c79a') ?? inheritedFg ?? parseColor('#ffffff');
+  const trackColor = parseColor(props.scrollbarTrackColor) ?? parseColor('#20263a') ?? inheritedBg ?? parseColor('#111827');
+
+  if (showV) {
+    const trackX = innerX + innerWidth - 1;
+    for (let i = 0; i < innerHeight; i++) {
+      writeCharClipped(ctx, trackX, innerY + i, '│', trackColor, null);
+    }
+
+    const maxScroll = Math.max(0, totalHeight - innerHeight);
+    const thumbSize = Math.max(1, Math.floor((innerHeight * innerHeight) / totalHeight));
+    const maxThumbPos = Math.max(0, innerHeight - thumbSize);
+    const thumbPos = maxScroll === 0 ? 0 : Math.round((layoutNode.scrollY / maxScroll) * maxThumbPos);
+
+    for (let i = 0; i < thumbSize; i++) {
+      writeCharClipped(ctx, trackX, innerY + thumbPos + i, '█', thumbColor, null);
+    }
+  }
+
+  if (showH) {
+    const trackY = innerY + innerHeight - 1;
+    for (let i = 0; i < innerWidth; i++) {
+      writeCharClipped(ctx, innerX + i, trackY, '─', trackColor, null);
+    }
+
+    const maxScroll = Math.max(0, totalWidth - innerWidth);
+    const thumbSize = Math.max(1, Math.floor((innerWidth * innerWidth) / totalWidth));
+    const maxThumbPos = Math.max(0, innerWidth - thumbSize);
+    const thumbPos = maxScroll === 0 ? 0 : Math.round((layoutNode.scrollX / maxScroll) * maxThumbPos);
+
+    for (let i = 0; i < thumbSize; i++) {
+      writeCharClipped(ctx, innerX + thumbPos + i, trackY, '█', thumbColor, null);
+    }
+  }
+
+  if (showV && showH) {
+    writeCharClipped(ctx, innerX + innerWidth - 1, innerY + innerHeight - 1, '■', thumbColor, null);
   }
 }
 

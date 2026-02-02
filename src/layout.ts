@@ -123,6 +123,13 @@ export function stripAnsi(str: string): string {
 }
 
 /**
+ * Clamp a number between min and max
+ */
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+/**
  * Get text content from a VNode tree
  */
 export function getTextContent(node: VNode | string | number): string {
@@ -403,8 +410,8 @@ function layoutNode(node: VNode, ctx: LayoutContext): LayoutNode {
     }
 
     // Track content size
-    contentWidth = Math.max(contentWidth, childX - x + childSize.width);
-    contentHeight = Math.max(contentHeight, childY - y + childSize.height);
+    contentWidth = Math.max(contentWidth, childX - innerX + childSize.width);
+    contentHeight = Math.max(contentHeight, childY - innerY + childSize.height);
 
     // Advance position
     mainPos += (isRow ? childSize.width : childSize.height) + mainGap;
@@ -415,12 +422,19 @@ function layoutNode(node: VNode, ctx: LayoutContext): LayoutNode {
     layoutChildren.reverse();
   }
 
+  const maxScrollX = Math.max(0, contentWidth - Math.max(0, innerWidth));
+  const maxScrollY = Math.max(0, contentHeight - Math.max(0, innerHeight));
+  const rawScrollX = typeof props.scrollX === 'number' ? props.scrollX : 0;
+  const rawScrollY = typeof props.scrollY === 'number' ? props.scrollY : 0;
+  const scrollX = clamp(Math.floor(rawScrollX), 0, maxScrollX);
+  const scrollY = clamp(Math.floor(rawScrollY), 0, maxScrollY);
+
   return {
     node,
     rect: { x, y, width, height },
     children: layoutChildren,
-    scrollX: 0,
-    scrollY: 0,
+    scrollX,
+    scrollY,
     contentWidth,
     contentHeight,
   };
