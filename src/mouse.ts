@@ -51,6 +51,8 @@ let lastMousePos: { x: number; y: number } = { x: 0, y: 0 }
 
 export function enableMouse(): string {
   mouseEnabled = true
+  // Enable standard (1000), drag (1002), all-motion (1003), and SGR (1006)
+  // This redundancy helps some terminals (like Windows Terminal) properly initialize the mouse state
   return "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
 }
 

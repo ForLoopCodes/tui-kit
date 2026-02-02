@@ -14,6 +14,7 @@
  */
 
 import type { RGBA } from "./colors"
+import { setFocusedElement } from "./input"
 
 export interface ElementState {
   id: string
@@ -21,6 +22,7 @@ export interface ElementState {
   focused: boolean
   disabled: boolean
   value: any
+  tabIndex?: number
   cursor?: number
   scrollOffset?: number
 }
@@ -88,22 +90,67 @@ export interface TableState extends ElementState {
 }
 
 let elementRegistry: Map<string, ElementState> = new Map()
-let focusOrder: string[] = []
-let currentFocusIndex = -1
+let focusCandidates: { id: string; tabIndex: number; order: number }[] = []
+let focusCandidateSet: Set<string> = new Set()
+let currentFocusId: string | null = null
+let registrationOrder = 0
+let autoFocused = false
 let nextId = 1
+
+function isFocusable(state: ElementState): boolean {
+  const tabIndex = state.tabIndex ?? 0
+  return !state.disabled && tabIndex >= 0
+}
+
+function clearFocusState(): void {
+  for (const [, el] of elementRegistry) {
+    el.focused = false
+  }
+  currentFocusId = null
+  setFocusedElement(null)
+}
+
+function orderedFocusables(): ElementState[] {
+  const positive = focusCandidates
+    .filter(c => c.tabIndex > 0)
+    .sort((a, b) => a.tabIndex - b.tabIndex || a.order - b.order)
+
+  const zeros = focusCandidates
+    .filter(c => c.tabIndex === 0)
+    .sort((a, b) => a.order - b.order)
+
+  return [...positive, ...zeros]
+    .map(c => elementRegistry.get(c.id))
+    .filter((el): el is ElementState => !!el)
+}
 
 export function generateId(prefix: string): string {
   return `${prefix}_${nextId++}`
 }
 
 export function registerElement(state: ElementState): void {
+  if (state.tabIndex === undefined) state.tabIndex = 0
   elementRegistry.set(state.id, state)
-  focusOrder.push(state.id)
+
+  const focusable = isFocusable(state)
+  const currentState = currentFocusId ? elementRegistry.get(currentFocusId) : undefined
+  const currentIsFocusable = currentState ? isFocusable(currentState) : false
+
+  if (focusable && !focusCandidateSet.has(state.id)) {
+    focusCandidateSet.add(state.id)
+    focusCandidates.push({ id: state.id, tabIndex: state.tabIndex, order: registrationOrder++ })
+  }
+
+  if (focusable && !autoFocused && (!currentIsFocusable || currentFocusId === null)) {
+    focusElement(state.id)
+    autoFocused = true
+  }
 }
 
 export function unregisterElement(id: string): void {
   elementRegistry.delete(id)
-  focusOrder = focusOrder.filter(fid => fid !== id)
+  focusCandidates = focusCandidates.filter(c => c.id !== id)
+  focusCandidateSet.delete(id)
 }
 
 export function getElement<T extends ElementState>(id: string): T | undefined {
@@ -116,40 +163,79 @@ export function setElementValue(id: string, value: any): void {
 }
 
 export function focusElement(id: string): void {
+  const target = elementRegistry.get(id)
+  if (!target || !isFocusable(target)) return
+
   for (const [key, el] of elementRegistry) {
     el.focused = key === id
   }
-  currentFocusIndex = focusOrder.indexOf(id)
+  currentFocusId = id
+  setFocusedElement(id)
 }
 
 export function getFocusedElement(): ElementState | undefined {
+  if (currentFocusId) return elementRegistry.get(currentFocusId)
   return [...elementRegistry.values()].find(el => el.focused)
 }
 
 export function focusNext(): string | undefined {
-  if (focusOrder.length === 0) return undefined
-  currentFocusIndex = (currentFocusIndex + 1) % focusOrder.length
-  const id = focusOrder[currentFocusIndex]
+  const focusables = orderedFocusables()
+  if (focusables.length === 0) return undefined
+  const currentId = currentFocusId || getFocusedElement()?.id
+  const idx = currentId ? focusables.findIndex(f => f.id === currentId) : -1
+  const nextIdx = (idx + 1) % focusables.length
+  const id = focusables[nextIdx].id
   focusElement(id)
   return id
 }
 
 export function focusPrev(): string | undefined {
-  if (focusOrder.length === 0) return undefined
-  currentFocusIndex = currentFocusIndex <= 0 ? focusOrder.length - 1 : currentFocusIndex - 1
-  const id = focusOrder[currentFocusIndex]
+  const focusables = orderedFocusables()
+  if (focusables.length === 0) return undefined
+  const currentId = currentFocusId || getFocusedElement()?.id
+  const idx = currentId ? focusables.findIndex(f => f.id === currentId) : -1
+  const prevIdx = idx <= 0 ? focusables.length - 1 : idx - 1
+  const id = focusables[prevIdx].id
   focusElement(id)
   return id
 }
 
 export function clearRegistry(): void {
   elementRegistry.clear()
-  focusOrder = []
-  currentFocusIndex = -1
+  focusCandidates = []
+  focusCandidateSet.clear()
+  registrationOrder = 0
+  currentFocusId = null
+  autoFocused = false
+  setFocusedElement(null)
 }
 
 export function resetFocusOrder(): void {
-  focusOrder = []
+  focusCandidates = []
+  focusCandidateSet.clear()
+  registrationOrder = 0
+  autoFocused = false
+}
+
+export function finalizeFocusCycle(): void {
+  if (focusCandidates.length === 0) {
+    clearFocusState()
+    return
+  }
+
+  const focusables = orderedFocusables()
+  if (focusables.length === 0) {
+    clearFocusState()
+    return
+  }
+
+  if (currentFocusId && focusCandidateSet.has(currentFocusId)) {
+    // Ensure internal state remains in sync across renders
+    focusElement(currentFocusId)
+    return
+  }
+
+  focusElement(focusables[0].id)
 }
 
 export function createInputState(id: string, value = "", placeholder = ""): InputState {
@@ -302,13 +388,16 @@ export function renderInput(state: InputState, width: number): string {
   const visibleWidth = Math.max(1, width - 2)
   let start = 0
   if (state.cursor > start + visibleWidth - 1) start = state.cursor - visibleWidth + 1
+  if (state.cursor < start) start = state.cursor
   const visible = text.slice(start, start + visibleWidth).padEnd(visibleWidth)
   const cursorPos = state.cursor - start
-  
+
+  const chars = visible.split("")
   if (state.focused && cursorPos >= 0 && cursorPos < visibleWidth) {
-    return "[" + visible.slice(0, cursorPos) + "\x1b[7m" + (visible[cursorPos] || " ") + "\x1b[27m" + visible.slice(cursorPos + 1) + "]"
+    chars[cursorPos] = "▌"
   }
-  return "[" + visible + "]"
+
+  return "[" + chars.join("") + "]"
 }
 
 export function renderSelect(state: SelectState, width: number): string[] {
@@ -328,9 +417,7 @@ export function renderSelect(state: SelectState, width: number): string[] {
 
 export function renderCheckbox(state: CheckboxState): string {
   const box = state.checked ? "[✓]" : "[ ]"
-  const focus = state.focused ? "\x1b[7m" : ""
-  const reset = state.focused ? "\x1b[27m" : ""
-  return `${focus}${box}${reset} ${state.label}`
+  return `${box} ${state.label}`
 }
 
 export function renderButton(label: string, state: ButtonState, width: number): string {

@@ -14,7 +14,7 @@
  */
 
 export { run, renderLines, createElement, Fragment } from "./tui"
-export type { VNode, RGBA, LayoutProps, BorderStyle } from "./tui"
+export type { VNode, RGBA, LayoutProps, BorderStyle, RunOptions } from "./tui"
 export { parseColor, toAnsiFg, toAnsiBg, reset, bold, dim, italic, underline } from "./colors"
 export { parseUnit, resolveUnit, getBorderChars } from "./layout"
 export { enableMouse, disableMouse, parseMouseEvent, processMouseEvent, registerRegion } from "./mouse"

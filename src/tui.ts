@@ -17,7 +17,7 @@ import { parseColor, toAnsiFg, toAnsiBg, reset, bold, dim, italic, underline, st
 import { parseUnit, resolveUnit, parsePadding, getBorderChars, calculateLayout, layoutFlexChildren, layoutGridChildren, type LayoutProps, type BorderStyle, type Display, type Overflow, type TextAlign } from "./layout"
 import { enableMouse, disableMouse, parseMouseEvent, processMouseEvent, registerRegion, clearRegions, getHoveredId, findRegionAt } from "./mouse"
 import { parseKey, processKeyInput, setFocusedElement, isResizeMode, isMoveMode, exitModes, registerGlobalKeybind } from "./input"
-import { registerElement, focusElement, focusNext, focusPrev, getFocusedElement, clearRegistry, resetFocusOrder, handleInputKey, handleSelectKey, handleCheckboxKey, getElement, type InputState, type SelectState, type CheckboxState, type ButtonState, createInputState, createButtonState, createSelectState, createCheckboxState, renderInput, renderSelect, renderCheckbox, renderButton, renderHr, renderList, renderTable, createListState, createTableState, type ListState, type TableState } from "./elements"
+import { registerElement, focusElement, focusNext, focusPrev, getFocusedElement, clearRegistry, resetFocusOrder, finalizeFocusCycle, handleInputKey, handleSelectKey, handleCheckboxKey, getElement, type InputState, type SelectState, type CheckboxState, type ButtonState, type ElementState, createInputState, createButtonState, createSelectState, createCheckboxState, renderInput, renderSelect, renderCheckbox, renderButton, renderHr, renderList, renderTable, createListState, createTableState, type ListState, type TableState } from "./elements"
 
 export type VNode = { type: string; props: Record<string, any>; children: (VNode | string)[] }
 export const Fragment = "Fragment"
@@ -54,6 +54,9 @@ interface BoxProps extends StyleProps, LayoutProps {
   resizable?: boolean
   movable?: boolean
   hoverBg?: string
+  hoverColor?: string
+  focusBg?: string
+  focusColor?: string
   onFocus?: () => void
   onBlur?: () => void
   onClick?: () => void
@@ -244,6 +247,16 @@ function getStyleCell(style: StyleProps): Partial<Cell> {
   }
 }
 
+function applyFocusStyle(cellStyle: Partial<Cell>, focused: boolean, props: { focusBg?: string; focusColor?: string; bg?: string; color?: string }): Partial<Cell> {
+  if (!focused) return cellStyle
+  const styled = { ...cellStyle }
+  const focusBg = parseColor(props.focusBg || "#444") || styled.bg
+  const focusFg = parseColor(props.focusColor || "") || styled.fg || parseColor("#fff")
+  if (focusBg) styled.bg = focusBg
+  if (focusFg) styled.fg = focusFg
+  return styled
+}
+
 function measureContent(node: VNode | string, maxWidth: number): { width: number; height: number } {
   if (typeof node === "string") {
     const lines = node.split("\n")
@@ -323,10 +336,11 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
       state = createInputState(id, node.props.value || "", node.props.placeholder || "")
       if (node.props.type === "password") state.mask = "•"
     }
+    state.tabIndex = node.props.tabIndex ?? state.tabIndex ?? 0
     registerElement(state)
     const w = resolveUnit(parseUnit(node.props.width), ctx.width) || 20
     const rendered = renderInput(state, w)
-    const cellStyle = getStyleCell(style)
+    const cellStyle = applyFocusStyle(getStyleCell(style), state.focused, node.props)
     ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle, w)
     elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
     registerRegion({
@@ -342,16 +356,28 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     if (!state) {
       state = createButtonState(id)
     }
+    state.tabIndex = node.props.tabIndex ?? state.tabIndex ?? 0
     registerElement(state)
     state.hovered = getHoveredId() === id
     const label = node.children.map(c => typeof c === "string" ? c : "").join("")
     const w = resolveUnit(parseUnit(node.props.width), ctx.width) || (label.length + 4)
-    const rendered = renderButton(label, state, w)
-    const cellStyle = getStyleCell(style)
-    if (state.hovered) {
-      cellStyle.bg = parseColor(node.props.hoverBg || node.props.bg)
+    const bracket = state.pressed ? "«" : "["
+    const close = state.pressed ? "»" : "]"
+    const padded = label.slice(0, w - 4).padStart(Math.floor((w - 4 + label.length) / 2)).padEnd(w - 4)
+    const buttonText = `${bracket} ${padded} ${close}`
+    let cellStyle = getStyleCell(style)
+
+    // Focus state has highest priority, then hover
+    if (state.focused) {
+      cellStyle = applyFocusStyle(cellStyle, true, node.props)
+    } else if (state.hovered) {
+      const hoverBg = parseColor(node.props.hoverBg || node.props.bg)
+      const hoverFg = node.props.hoverColor ? parseColor(node.props.hoverColor) : undefined
+      if (hoverBg) cellStyle.bg = hoverBg
+      if (hoverFg) cellStyle.fg = hoverFg
     }
-    ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle, w)
+    
+    ctx.buffer.writeText(ctx.x, ctx.y, buttonText, cellStyle, w)
     elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
     registerRegion({
       id, x: ctx.x, y: ctx.y, width: w, height: 1,
@@ -379,10 +405,11 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     if (!state) {
       state = createSelectState(id, options, node.props.value)
     }
+    state.tabIndex = node.props.tabIndex ?? state.tabIndex ?? 0
     registerElement(state)
     const w = resolveUnit(parseUnit(node.props.width), ctx.width) || 20
     const lines = renderSelect(state, w)
-    const cellStyle = getStyleCell(style)
+    const cellStyle = applyFocusStyle(getStyleCell(style), state.focused, node.props)
     lines.forEach((line, i) => ctx.buffer.writeText(ctx.x, ctx.y + i, line, cellStyle, w))
     elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: lines.length, node })
     registerRegion({
@@ -413,9 +440,10 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     if (!state) {
       state = createCheckboxState(id, node.props.checked || false, label)
     }
+    state.tabIndex = node.props.tabIndex ?? state.tabIndex ?? 0
     registerElement(state)
     const rendered = renderCheckbox(state)
-    const cellStyle = getStyleCell(style)
+    const cellStyle = applyFocusStyle(getStyleCell(style), state.focused, node.props)
     ctx.buffer.writeText(ctx.x, ctx.y, rendered, cellStyle)
     const w = rendered.length
     elementPositions.push({ id, x: ctx.x, y: ctx.y, width: w, height: 1, node })
@@ -440,6 +468,7 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     if (!state) {
       state = createListState(id, items, nodeType === "ol")
     }
+    state.tabIndex = node.props.tabIndex ?? state.tabIndex ?? 0
     registerElement(state)
     const lines = renderList(state, ctx.width)
     const cellStyle = getStyleCell(style)
@@ -513,11 +542,27 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     const boxW = resolveUnit(parseUnit(props.width), availW) || availW
     const boxH = resolveUnit(parseUnit(props.height), availH) || content.height + (props.border && props.border !== "none" ? 2 : 0) + (parsePadding(props.padding)[0] + parsePadding(props.padding)[2])
 
-    const cellStyle = getStyleCell(style)
+    let cellStyle = getStyleCell(style)
     const isHovered = id ? getHoveredId() === id : false
 
+    let boxState: ElementState | undefined
+    const isInteractiveBox = props.focusable || props.onClick || props.resizable || props.movable
+    if (id && isInteractiveBox) {
+      boxState = getElement<ElementState>(id)
+      if (!boxState) {
+        boxState = { id, type: "box", focused: false, disabled: false, value: null }
+      }
+      boxState.tabIndex = props.tabIndex ?? boxState.tabIndex ?? 0
+      registerElement(boxState)
+    }
+
     if (isHovered && props.hoverBg) {
-      cellStyle.bg = parseColor(props.hoverBg)
+      const hoverBg = parseColor(props.hoverBg)
+      if (hoverBg) cellStyle.bg = hoverBg
+    }
+
+    if (boxState?.focused) {
+      cellStyle = applyFocusStyle(cellStyle, true, props)
     }
 
     if (cellStyle.bg) {
@@ -539,10 +584,7 @@ function renderNode(node: VNode | string, ctx: RenderContext): void {
     if (id) {
       boxPositions.set(id, { x: boxX, y: boxY, width: boxW, height: boxH })
       const isClickable = !!props.onClick
-      if (props.focusable || isClickable || props.resizable || props.movable) {
-        if (props.focusable) {
-          registerElement({ id, type: "box", focused: false, disabled: false, value: null })
-        }
+      if (isInteractiveBox || isClickable) {
         elementPositions.push({ id, x: boxX, y: boxY, width: boxW, height: boxH, node })
         registerRegion({
           id, x: boxX, y: boxY, width: boxW, height: boxH,
@@ -646,6 +688,7 @@ export function renderLines(source: VNode, width?: number, height?: number): str
 export interface RunOptions {
   onExit?: () => void
   onUpdate?: (tree: VNode) => VNode
+  onBeforeRender?: (tree: VNode, draw: () => void) => void
 }
 
 export function run(source: VNode, options?: RunOptions) {
@@ -660,6 +703,8 @@ export function run(source: VNode, options?: RunOptions) {
 
   const buffer = new ScreenBuffer(width, height)
 
+  process.stdin.setRawMode(true).resume()
+  
   out.write("\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l")
   out.write(enableMouse())
 
@@ -671,10 +716,16 @@ export function run(source: VNode, options?: RunOptions) {
     resetFocusOrder()
     buffer.clear()
 
+    if (options?.onUpdate) {
+      tree = options.onUpdate(tree) || tree
+    }
+
     renderNode(tree, {
       buffer, x: 0, y: 0, width, height,
       style: {}, scrollX: 0, scrollY
     })
+
+    finalizeFocusCycle()
 
     out.write("\x1b[H" + buffer.render())
   }
@@ -710,64 +761,65 @@ export function run(source: VNode, options?: RunOptions) {
 
     const key = buf.toString()
 
-    if (key === "\u0003" || key === "\x1b") {
+    // Check for Ctrl+C to quit (standard SIGINT)
+    if (key === "\u0003") {
       exit()
+      return
+    }
+
+    // Process global or element-specific key bindings first
+    const bindingResult = processKeyInput(buf)
+    if (bindingResult.handled) {
+      draw()
       return
     }
 
     const parsed = parseKey(buf)
 
-    if (parsed.key === "tab" && !parsed.shift) {
-      focusNext()
+    // Handle Tab Navigation
+    if (parsed.key === "tab") {
+      if (parsed.shift) focusPrev()
+      else focusNext()
       draw()
       return
     }
 
-    if (parsed.key === "tab" && parsed.shift) {
-      focusPrev()
-      draw()
-      return
-    }
-
+    // Pass input to focused element
     const focused = getFocusedElement()
+    let elementHandled = false
+
     if (focused) {
       if (focused.type === "input") {
-        if (handleInputKey(focused as InputState, key)) {
-          draw()
-          return
+        elementHandled = handleInputKey(focused as InputState, key)
+      } else if (focused.type === "select") {
+        elementHandled = handleSelectKey(focused as SelectState, key)
+      } else if (focused.type === "checkbox") {
+        elementHandled = handleCheckboxKey(focused as CheckboxState, key)
+      } else if (focused.type === "button") {
+        if (key === "\r" || key === " " || key === "\n") {
+           const pos = elementPositions.find(p => p.id === focused.id)
+           if (pos?.node.props.onClick) pos.node.props.onClick()
+           elementHandled = true
         }
-      }
-      if (focused.type === "select") {
-        if (handleSelectKey(focused as SelectState, key)) {
-          draw()
-          return
-        }
-      }
-      if (focused.type === "checkbox") {
-        if (handleCheckboxKey(focused as CheckboxState, key)) {
-          draw()
-          return
-        }
-      }
-      if (focused.type === "button" && (key === "\r" || key === " ")) {
-        const pos = elementPositions.find(p => p.id === focused.id)
-        if (pos?.node.props.onClick) pos.node.props.onClick()
-        draw()
-        return
       }
     }
 
-    if (parsed.key === "up") scrollY = Math.max(0, scrollY - 1)
-    else if (parsed.key === "down") scrollY++
-    else if (parsed.key === "pageup") scrollY = Math.max(0, scrollY - height)
-    else if (parsed.key === "pagedown") scrollY += height
-    else if (key === "q") { exit(); return }
+    // Handle scrolling if not consumed by element
+    if (!elementHandled) {
+      if (parsed.key === "up") scrollY = Math.max(0, scrollY - 1)
+      else if (parsed.key === "down") scrollY++
+      else if (parsed.key === "pageup") scrollY = Math.max(0, scrollY - height)
+      else if (parsed.key === "pagedown") scrollY += height
+      else if (key === "q") { exit(); return }
+    }
 
     draw()
   }
 
-  process.stdin.setRawMode(true).resume().on("data", onData)
+  process.stdin.on("data", onData)
   out.on("resize", onResize)
+  
+  options?.onBeforeRender?.(tree, draw)
   draw()
 
   return exit

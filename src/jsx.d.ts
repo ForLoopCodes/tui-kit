@@ -65,6 +65,9 @@ type InteractiveProps = {
   resizable?: boolean
   movable?: boolean
   hoverBg?: string
+  hoverColor?: string
+  focusBg?: string
+  focusColor?: string
   onFocus?: () => void
   onBlur?: () => void
   onClick?: () => void
